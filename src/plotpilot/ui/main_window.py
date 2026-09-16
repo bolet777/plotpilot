@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
         backend = plotter_backend if plotter_backend is not None else AxiDrawCliBackend()
         self._plotter_service = PlotterService(backend, parent=self)
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
+        self._plotter_service.plot_state_changed.connect(self._apply_plot_state)
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -98,8 +100,22 @@ class MainWindow(QMainWindow):
         self._plotter_refresh_button = QPushButton("Refresh", central)
         self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
         plotter_buttons.addWidget(self._plotter_refresh_button)
+
+        self._plot_layer_button = QPushButton("Plot Selected Layer", central)
+        self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
+        plotter_buttons.addWidget(self._plot_layer_button)
+
+        self._plot_stop_button = QPushButton("Stop", central)
+        self._plot_stop_button.clicked.connect(self._plotter_service.cancel_plot)
+        self._plot_stop_button.setEnabled(False)
+        plotter_buttons.addWidget(self._plot_stop_button)
+
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
+
+        self._plot_activity_label = QLabel("", central)
+        self._plot_activity_label.setWordWrap(True)
+        root_layout.addWidget(self._plot_activity_label)
 
         self._plotter_message_label = QLabel("", central)
         self._plotter_message_label.setWordWrap(True)
@@ -115,6 +131,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self._build_menu()
         self._apply_plotter_status(self._plotter_service.status)
+        self._apply_plot_state(self._plotter_service.plot_state)
+        self._update_plot_controls()
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -148,10 +166,65 @@ class MainWindow(QMainWindow):
         else:
             indicator = "○ Not connected"
         self._plotter_status_label.setText(indicator)
-        self._plotter_message_label.setText(status.message)
-        enabled = status.pen_commands_enabled
-        self._pen_up_button.setEnabled(enabled)
-        self._pen_down_button.setEnabled(enabled)
+        if not self._plotter_service.plot_state.is_active:
+            self._plotter_message_label.setText(status.message)
+        self._update_plot_controls()
+
+    def _apply_plot_state(self, state: PlotState) -> None:
+        if state.phase is PlotPhase.RUNNING:
+            self._plot_activity_label.setText(state.message)
+        elif state.phase is PlotPhase.IDLE:
+            self._plot_activity_label.setText("")
+        else:
+            self._plot_activity_label.setText(state.message)
+        self._update_plot_controls()
+
+    def _update_plot_controls(self) -> None:
+        plot_active = self._plotter_service.plot_state.is_active
+        layer = self._current_layer()
+        can_plot = (
+            self._document is not None
+            and layer is not None
+            and self._plotter_service.status.is_connected
+            and not plot_active
+        )
+        self._plot_layer_button.setEnabled(can_plot)
+        self._plot_stop_button.setEnabled(plot_active)
+        self._plotter_refresh_button.setEnabled(not plot_active)
+        pen_ok = self._plotter_service.status.pen_commands_enabled and not plot_active
+        self._pen_up_button.setEnabled(pen_ok)
+        self._pen_down_button.setEnabled(pen_ok)
+
+    def _current_layer(self) -> SvgLayer | None:
+        if self._document is None or not self._layers:
+            return None
+        row = self._layers_list.currentRow()
+        if row < 0 or row >= len(self._layers):
+            return None
+        return self._layers[row]
+
+    def _on_plot_selected_layer(self) -> None:
+        if self._plotter_service.plot_state.is_active:
+            return
+        layer = self._current_layer()
+        document = self._document
+        if document is None or layer is None:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Plot layer",
+            f'Plot layer "{layer.name}"?\n\nThis will move the AxiDraw physically.',
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Ok:
+            return
+
+        error = self._plotter_service.start_plot_layer(document, layer)
+        if error is not None:
+            QMessageBox.warning(self, "Cannot plot", error)
+            self._update_plot_controls()
 
     def _open_svg(self) -> None:
         file_path, _selected_filter = QFileDialog.getOpenFileName(
@@ -195,11 +268,13 @@ class MainWindow(QMainWindow):
         self._layers_list.blockSignals(False)
         self._updating_layers = False
         self._update_preview_for_current_layer()
+        self._update_plot_controls()
 
     def _on_layer_row_changed(self, _row: int) -> None:
         if self._updating_layers:
             return
         self._update_preview_for_current_layer()
+        self._update_plot_controls()
 
     def _update_preview_for_current_layer(self) -> None:
         if self._document is None or not self._layers:
@@ -218,6 +293,7 @@ class MainWindow(QMainWindow):
     def set_document(self, document: SvgDocument) -> None:
         """Replace the active document and layer list (used after successful load)."""
         self._apply_document(document)
+        self._update_plot_controls()
 
 
 def _layer_swatch_icon(color: str | None) -> QIcon:

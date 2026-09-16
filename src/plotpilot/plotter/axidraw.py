@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import re
 import shutil
+import signal
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 
 CliRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
 
 DEFAULT_CLI = "axicli"
 DEFAULT_TIMEOUT = 30.0
+PLOT_CANCEL_WAIT = 8.0
 
 _INSTALL_HINT = (
     "Install AxiDraw software so axicli is on your PATH (https://axidraw.com/doc/cli_api/)."
@@ -30,18 +34,22 @@ def _default_runner(argv: list[str], timeout: float) -> subprocess.CompletedProc
     )
 
 
-def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
+def _combined_output(result: subprocess.CompletedProcess[str] | None) -> str:
+    if result is None:
+        return ""
     parts = [result.stdout.strip(), result.stderr.strip()]
     return "\n".join(part for part in parts if part)
 
 
 @dataclass
 class AxiDrawCliBackend:
-    """Invoke axicli manual-mode commands; no plotting or XY walks."""
+    """Invoke axicli manual-mode and plot commands."""
 
     cli_path: str = DEFAULT_CLI
     timeout_seconds: float = DEFAULT_TIMEOUT
     _runner: CliRunner = field(default=_default_runner, repr=False)
+    _plot_process: subprocess.Popen[str] | None = field(default=None, init=False, repr=False)
+    _cancel_requested: bool = field(default=False, init=False, repr=False)
 
     def _resolve_cli(self) -> str | None:
         if "/" in self.cli_path or self.cli_path.startswith("."):
@@ -127,6 +135,63 @@ class AxiDrawCliBackend:
     def pen_down(self) -> PlotterStatus:
         return self._pen_command("lower_pen", "Pen lowered")
 
+    def plot_svg(self, svg_path: Path) -> PlotResult:
+        cli = self._resolve_cli()
+        if cli is None:
+            return PlotResult(
+                success=False,
+                message=f"AxiDraw CLI not found. {_INSTALL_HINT}",
+            )
+
+        self._cancel_requested = False
+        argv = [cli, str(svg_path), "-m", "plot", "-c", "1"]
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            return PlotResult(success=False, message=str(exc))
+
+        self._plot_process = proc
+        try:
+            stdout, stderr = proc.communicate()
+        finally:
+            self._plot_process = None
+
+        blob = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
+        if self._cancel_requested:
+            return PlotResult(
+                success=False,
+                cancelled=True,
+                message="Plot stopped",
+                detail=blob,
+            )
+
+        if proc.returncode != 0:
+            summary = _summarize_plot_output(blob) or f"axicli exited with code {proc.returncode}"
+            return PlotResult(success=False, message=summary, detail=blob)
+
+        return PlotResult(success=True, message="Plot complete", detail=blob)
+
+    def cancel_plot(self) -> None:
+        proc = self._plot_process
+        if proc is None or proc.poll() is not None:
+            return
+        self._cancel_requested = True
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=PLOT_CANCEL_WAIT)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+
     def _pen_command(self, manual_cmd: str, success_message: str) -> PlotterStatus:
         try:
             proc = self._manual(manual_cmd)
@@ -149,6 +214,16 @@ class AxiDrawCliBackend:
             state=PlotterConnectionState.CONNECTED,
             message=success_message,
         )
+
+
+def _summarize_plot_output(blob: str) -> str | None:
+    if not blob:
+        return None
+    for line in blob.splitlines():
+        cleaned = line.strip()
+        if cleaned and "Failed to connect" not in cleaned:
+            return cleaned
+    return blob.splitlines()[0].strip()
 
 
 def _parse_list_names(text: str) -> list[str]:
