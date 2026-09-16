@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="10" height="10">
+  <g inkscape:groupmode="layer" inkscape:label="Only Layer">
+    <g id="nested-not-a-layer">
+      <path stroke="#123456" d="M0 0 L1 1"/>
+    </g>
+  </g>
+</svg>
