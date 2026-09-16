@@ -212,12 +212,14 @@ class MainWindow(QMainWindow):
 
     def _apply_plot_state(self, state: PlotState) -> None:
         job = self._multi_layer_service.job
-        if job.is_active:
+        if job.is_active and state.phase is not PlotPhase.STOPPING:
             return
         if state.phase is PlotPhase.RUNNING:
             self._plot_activity_label.setText(state.message)
+        elif state.phase is PlotPhase.STOPPING:
+            self._plot_activity_label.setText(state.message)
         elif state.phase is PlotPhase.IDLE:
-            self._plot_activity_label.setText("")
+            self._plot_activity_label.setText(state.message)
         else:
             self._plot_activity_label.setText(state.message)
         self._update_plot_controls()
@@ -268,7 +270,9 @@ class MainWindow(QMainWindow):
         self._apply_multi_layer_job(self._multi_layer_service.job)
 
     def _update_plot_controls(self) -> None:
-        plot_active = self._plotter_service.plot_state.is_active
+        plot_state = self._plotter_service.plot_state
+        plot_active = plot_state.is_active
+        stopping = plot_state.phase is PlotPhase.STOPPING
         job = self._multi_layer_service.job
         job_active = job.is_active
         job_blocks_ui = job_active or job.state in (
@@ -288,18 +292,23 @@ class MainWindow(QMainWindow):
         can_plot_multi = can_start and len(checked) >= 1
         self._plot_layer_button.setEnabled(can_plot_single)
         self._plot_checked_button.setEnabled(can_plot_multi)
-        stop_enabled = plot_active or job_active
+        stop_enabled = (plot_active or job_active) and not stopping
         self._plot_stop_button.setEnabled(stop_enabled)
         if job_active and job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
             self._plot_stop_button.setText("Stop Job")
         else:
             self._plot_stop_button.setText("Stop")
         self._multi_continue_button.setEnabled(
-            job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE and not plot_active
+            job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE
+            and not plot_active
+            and not stopping
         )
         self._plotter_refresh_button.setEnabled(not plot_active and not job_active)
         pen_ok = (
-            self._plotter_service.status.pen_commands_enabled and not plot_active and not job_active
+            self._plotter_service.status.pen_commands_enabled
+            and not plot_active
+            and not job_active
+            and not stopping
         )
         self._pen_up_button.setEnabled(pen_ok)
         self._pen_down_button.setEnabled(pen_ok)
@@ -414,7 +423,7 @@ class MainWindow(QMainWindow):
         if self._multi_layer_service.job.is_active:
             self._multi_layer_service.stop_job()
             return
-        self._plotter_service.cancel_plot()
+        self._plotter_service.request_safe_stop()
 
     def _open_svg(self) -> None:
         if self._multi_layer_service.job.is_active:

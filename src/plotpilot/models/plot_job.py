@@ -11,6 +11,7 @@ class PlotPhase(StrEnum):
 
     IDLE = "idle"
     RUNNING = "running"
+    STOPPING = "stopping"
     SUCCEEDED = "succeeded"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -26,7 +27,7 @@ class PlotState:
 
     @property
     def is_active(self) -> bool:
-        return self.phase is PlotPhase.RUNNING
+        return self.phase in (PlotPhase.RUNNING, PlotPhase.STOPPING)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,3 +38,18 @@ class PlotResult:
     message: str
     cancelled: bool = False
     detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SafeStopResult:
+    """Outcome of raise_pen → walk_home → disable_xy after stop."""
+
+    pen_raised: bool
+    homed: bool
+    motors_disabled: bool
+    message: str
+    errors: tuple[str, ...] = ()
+
+    @property
+    def cleanup_complete(self) -> bool:
+        return self.pen_raised and self.homed and self.motors_disabled

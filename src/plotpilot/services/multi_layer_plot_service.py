@@ -13,7 +13,7 @@ from plotpilot.models.multi_layer_job import (
     MultiLayerPlotJob,
     idle_multi_layer_job,
 )
-from plotpilot.models.plot_job import PlotPhase, PlotState
+from plotpilot.models.plot_job import PlotPhase, PlotState, SafeStopResult
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
@@ -37,8 +37,10 @@ class MultiLayerPlotService(QObject):
         self._layer_by_id: dict[str, SvgLayer] = {}
         self._pen_up_wait = False
         self._continue_in_flight = False
+        self._awaiting_stop_cleanup = False
         self._plotter.plot_state_changed.connect(self._on_plot_state_changed)
         self._plotter.status_changed.connect(self._on_plotter_status_changed)
+        self._plotter.safe_stop_finished.connect(self._on_safe_stop_finished)
 
     @property
     def job(self) -> MultiLayerPlotJob:
@@ -54,7 +56,7 @@ class MultiLayerPlotService(QObject):
         """Begin plotting the first layer. Returns an error message or None if started."""
         if self._job.is_active:
             return "A multi-layer plot is already running."
-        if self._plotter.plot_state.is_active:
+        if self._plotter.plot_state.is_active or self._awaiting_stop_cleanup:
             return "A plot is already running."
         if not self._plotter.status.is_connected:
             return "AxiDraw is not connected."
@@ -108,21 +110,11 @@ class MultiLayerPlotService(QObject):
             MultiLayerJobState.ERROR,
         ):
             return
+        if self._awaiting_stop_cleanup:
+            return
         self._pen_up_wait = False
-        if self._plotter.plot_state.is_active:
-            self._plotter.cancel_plot()
-        completed = self._job.completed_count
-        total = self._job.total_layers
-        self._reset_job(
-            MultiLayerPlotJob(
-                layers=self._job.layers,
-                current_index=self._job.current_index,
-                state=MultiLayerJobState.CANCELLED,
-                settings=self._job.settings,
-                completed_count=completed,
-                message=f"Multi-layer plot stopped\n{completed} / {total} layers completed",
-            )
-        )
+        self._awaiting_stop_cleanup = True
+        self._plotter.request_safe_stop()
 
     def _start_current_layer(self) -> str | None:
         layer_snapshot = self._job.current_layer
@@ -158,6 +150,8 @@ class MultiLayerPlotService(QObject):
             self._on_layer_plot_succeeded()
             return
         if state.phase is PlotPhase.CANCELLED:
+            if self._awaiting_stop_cleanup:
+                return
             completed = self._job.completed_count
             total = self._job.total_layers
             self._reset_job(
@@ -212,6 +206,25 @@ class MultiLayerPlotService(QObject):
         )
         self._pen_up_wait = True
         self._plotter.pen_up()
+
+    def _on_safe_stop_finished(self, result: SafeStopResult) -> None:
+        if not self._awaiting_stop_cleanup:
+            return
+        self._awaiting_stop_cleanup = False
+        completed = self._job.completed_count
+        total = self._job.total_layers
+        layer_note = f"Multi-layer plot stopped\n{completed} / {total} layers completed"
+        body = f"{layer_note}\n\n{result.message}"
+        self._reset_job(
+            MultiLayerPlotJob(
+                layers=self._job.layers,
+                current_index=self._job.current_index,
+                state=MultiLayerJobState.CANCELLED,
+                settings=self._job.settings,
+                completed_count=completed,
+                message=body,
+            )
+        )
 
     def _on_plotter_status_changed(self, status: PlotterStatus) -> None:
         if not self._pen_up_wait:
