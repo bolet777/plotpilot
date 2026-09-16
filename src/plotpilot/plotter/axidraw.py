@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from plotpilot.models.plot_job import PlotResult
+from plotpilot.models.plot_settings import PlotSettings, build_axicli_plot_argv
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 
 CliRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
@@ -135,7 +136,12 @@ class AxiDrawCliBackend:
     def pen_down(self) -> PlotterStatus:
         return self._pen_command("lower_pen", "Pen lowered")
 
-    def plot_svg(self, svg_path: Path) -> PlotResult:
+    def plot_svg(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PlotResult:
         cli = self._resolve_cli()
         if cli is None:
             return PlotResult(
@@ -144,7 +150,10 @@ class AxiDrawCliBackend:
             )
 
         self._cancel_requested = False
-        argv = [cli, str(svg_path), "-m", "plot", "-c", "1"]
+        try:
+            argv = build_axicli_plot_argv(cli, svg_path, settings)
+        except ValueError as exc:
+            return PlotResult(success=False, message=str(exc))
         try:
             proc = subprocess.Popen(
                 argv,
