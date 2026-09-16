@@ -90,10 +90,11 @@ def test_cancel_plot(qapp) -> None:
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
     _wait_for_signal(service.plot_state_changed)
-    service.cancel_plot()
-    _wait_for_signal(service.plot_state_changed)
+    service.request_safe_stop()
+    _wait_for_signal(service.safe_stop_finished)
     assert fake.cancel_plot_calls >= 1
-    assert service.plot_state.phase is PlotPhase.CANCELLED
+    assert service.plot_state.phase is PlotPhase.IDLE
+    assert "motors disabled" in service.plot_state.message.lower()
 
 
 def test_double_start_blocked(qapp) -> None:

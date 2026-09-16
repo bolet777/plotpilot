@@ -23,6 +23,12 @@ class PlotterBackend(Protocol):
     def pen_down(self) -> PlotterStatus:
         """Lower pen; returns updated status."""
 
+    def walk_home(self) -> PlotterStatus:
+        """Walk to the position where XY motors were enabled (not necessarily hardware 0,0)."""
+
+    def disable_xy(self) -> PlotterStatus:
+        """De-energize XY stepper motors."""
+
     def plot_svg(
         self,
         svg_path: Path,

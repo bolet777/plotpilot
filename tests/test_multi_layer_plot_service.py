@@ -150,9 +150,12 @@ def test_stop_while_waiting(qapp) -> None:
     _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     service.stop_job()
+    _wait_for_signal(plotter.safe_stop_finished)
     assert service.job.state is MultiLayerJobState.CANCELLED
     assert service.job.completed_count == 1
     assert len(fake.plot_paths) == 1
+    assert fake.walk_home_calls >= 1
+    assert fake.disable_xy_calls >= 1
 
 
 def test_failure_stops_job(qapp) -> None:

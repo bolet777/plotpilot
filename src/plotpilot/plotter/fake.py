@@ -24,14 +24,21 @@ class FakePlotterBackend:
     )
     pen_up_raises: BaseException | None = None
     pen_down_raises: BaseException | None = None
+    walk_home_raises: BaseException | None = None
+    disable_xy_raises: BaseException | None = None
     pen_up_result: PlotterStatus | None = None
     pen_down_result: PlotterStatus | None = None
+    walk_home_result: PlotterStatus | None = None
+    disable_xy_result: PlotterStatus | None = None
     plot_result: PlotResult | None = None
     plot_block_until_cancel: bool = False
     plot_delay_seconds: float = 0.0
     detect_calls: int = 0
     pen_up_calls: int = 0
     pen_down_calls: int = 0
+    walk_home_calls: int = 0
+    disable_xy_calls: int = 0
+    manual_sequence: list[str] = field(default_factory=list)
     plot_paths: list[Path] = field(default_factory=list)
     plot_settings_used: list[PlotSettings | None] = field(default_factory=list)
     plot_file_contents: list[str] = field(default_factory=list)
@@ -45,6 +52,7 @@ class FakePlotterBackend:
 
     def pen_up(self) -> PlotterStatus:
         self.pen_up_calls += 1
+        self.manual_sequence.append("raise_pen")
         if self.pen_up_raises is not None:
             raise self.pen_up_raises
         if self.pen_up_result is not None:
@@ -53,10 +61,29 @@ class FakePlotterBackend:
 
     def pen_down(self) -> PlotterStatus:
         self.pen_down_calls += 1
+        self.manual_sequence.append("lower_pen")
         if self.pen_down_raises is not None:
             raise self.pen_down_raises
         if self.pen_down_result is not None:
             return self.pen_down_result
+        return self.detect_result
+
+    def walk_home(self) -> PlotterStatus:
+        self.walk_home_calls += 1
+        self.manual_sequence.append("walk_home")
+        if self.walk_home_raises is not None:
+            raise self.walk_home_raises
+        if self.walk_home_result is not None:
+            return self.walk_home_result
+        return self.detect_result
+
+    def disable_xy(self) -> PlotterStatus:
+        self.disable_xy_calls += 1
+        self.manual_sequence.append("disable_xy")
+        if self.disable_xy_raises is not None:
+            raise self.disable_xy_raises
+        if self.disable_xy_result is not None:
+            return self.disable_xy_result
         return self.detect_result
 
     def plot_svg(
@@ -76,6 +103,7 @@ class FakePlotterBackend:
         if self.plot_block_until_cancel:
             while not self._cancel_event.wait(0.02):
                 continue
+            self.manual_sequence.append("plot_exited")
             return PlotResult(
                 success=False,
                 cancelled=True,

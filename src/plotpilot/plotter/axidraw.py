@@ -136,6 +136,13 @@ class AxiDrawCliBackend:
     def pen_down(self) -> PlotterStatus:
         return self._pen_command("lower_pen", "Pen lowered")
 
+    def walk_home(self) -> PlotterStatus:
+        # walk_home returns to enable-origin, not guaranteed machine absolute home — see CLI docs.
+        return self._pen_command("walk_home", "Walk home complete")
+
+    def disable_xy(self) -> PlotterStatus:
+        return self._pen_command("disable_xy", "Motors disabled")
+
     def plot_svg(
         self,
         svg_path: Path,

@@ -109,7 +109,7 @@ def test_stop_button_while_plotting(qapp, monkeypatch) -> None:
     _wait_for_signal(window.plotter_service.plot_state_changed)
     assert window._plot_stop_button.isEnabled()
     window._plot_stop_button.click()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    _wait_for_signal(window.plotter_service.safe_stop_finished)
 
 
 def test_no_auto_plot_on_startup(qapp) -> None:
