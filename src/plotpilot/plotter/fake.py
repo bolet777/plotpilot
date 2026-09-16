@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from plotpilot.models.plot_job import PlotResult
+from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 
 
@@ -32,6 +33,7 @@ class FakePlotterBackend:
     pen_up_calls: int = 0
     pen_down_calls: int = 0
     plot_paths: list[Path] = field(default_factory=list)
+    plot_settings_used: list[PlotSettings | None] = field(default_factory=list)
     plot_file_contents: list[str] = field(default_factory=list)
     plot_file_existed: bool = False
     cancel_plot_calls: int = 0
@@ -57,8 +59,14 @@ class FakePlotterBackend:
             return self.pen_down_result
         return self.detect_result
 
-    def plot_svg(self, svg_path: Path) -> PlotResult:
+    def plot_svg(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PlotResult:
         self.plot_paths.append(svg_path)
+        self.plot_settings_used.append(settings)
         self.plot_file_existed = svg_path.exists()
         if svg_path.exists():
             self.plot_file_contents.append(svg_path.read_text(encoding="utf-8"))

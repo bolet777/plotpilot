@@ -11,12 +11,14 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState
+from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.plot_service import plot_svg_for_layer, validate_layer_plot_svg
+from plotpilot.services.settings_service import SettingsService
 from plotpilot.svg.plot_dimensions import PlotDimensionError
 
 logger = logging.getLogger(__name__)
@@ -63,10 +65,12 @@ class PlotterService(QObject):
         self,
         backend: PlotterBackend | None = None,
         *,
+        settings_service: SettingsService | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._backend = backend if backend is not None else AxiDrawCliBackend()
+        self._settings_service = settings_service
         self._status = PlotterStatus(
             state=PlotterConnectionState.DISCONNECTED,
             message="Not connected. Use Refresh to detect.",
@@ -77,6 +81,7 @@ class PlotterService(QObject):
         self._operation_in_flight = False
         self._plot_in_flight = False
         self._temp_plot_path: Path | None = None
+        self._active_plot_settings: PlotSettings | None = None
 
     @property
     def status(self) -> PlotterStatus:
@@ -131,6 +136,7 @@ class PlotterService(QObject):
 
         temp_path = _write_temp_svg(svg_text)
         self._temp_plot_path = temp_path
+        self._active_plot_settings = self._snapshot_plot_settings()
         self._plot_in_flight = True
         self._set_plot_state(
             PlotPhase.RUNNING,
@@ -138,8 +144,10 @@ class PlotterService(QObject):
             f"Plotting: {layer.name}",
         )
 
+        plot_settings = self._active_plot_settings
+
         def _run_plot() -> PlotResult:
-            return self._backend.plot_svg(temp_path)
+            return self._backend.plot_svg(temp_path, settings=plot_settings)
 
         self._run_async(_run_plot, "plot")
         return None
@@ -165,6 +173,7 @@ class PlotterService(QObject):
     def _on_task_finished(self, result: object, operation_name: str) -> None:
         if operation_name == "plot":
             self._plot_in_flight = False
+            self._active_plot_settings = None
             self._cleanup_temp_plot_file()
             plot_result = (
                 result
@@ -205,6 +214,11 @@ class PlotterService(QObject):
     def _set_plot_state(self, phase: PlotPhase, layer_name: str, message: str) -> None:
         self._plot_state = PlotState(phase=phase, layer_name=layer_name, message=message)
         self.plot_state_changed.emit(self._plot_state)
+
+    def _snapshot_plot_settings(self) -> PlotSettings:
+        if self._settings_service is None:
+            return PlotSettings()
+        return self._settings_service.plot_settings
 
     def _cleanup_temp_plot_file(self) -> None:
         path = self._temp_plot_path

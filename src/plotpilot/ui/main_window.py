@@ -28,7 +28,9 @@ from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_service import preview_svg_for_layer
+from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
 
 
@@ -39,6 +41,7 @@ class MainWindow(QMainWindow):
         self,
         *,
         plotter_backend: PlotterBackend | None = None,
+        settings_service: SettingsService | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("PlotPilot")
@@ -49,7 +52,14 @@ class MainWindow(QMainWindow):
         self._updating_layers = False
 
         backend = plotter_backend if plotter_backend is not None else AxiDrawCliBackend()
-        self._plotter_service = PlotterService(backend, parent=self)
+        self._settings_service = (
+            settings_service if settings_service is not None else SettingsService(parent=self)
+        )
+        self._plotter_service = PlotterService(
+            backend,
+            settings_service=self._settings_service,
+            parent=self,
+        )
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
         self._plotter_service.plot_state_changed.connect(self._apply_plot_state)
 
@@ -112,6 +122,9 @@ class MainWindow(QMainWindow):
 
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
+
+        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
+        root_layout.addWidget(self._plot_settings)
 
         self._plot_activity_label = QLabel("", central)
         self._plot_activity_label.setWordWrap(True)
@@ -194,6 +207,7 @@ class MainWindow(QMainWindow):
         pen_ok = self._plotter_service.status.pen_commands_enabled and not plot_active
         self._pen_up_button.setEnabled(pen_ok)
         self._pen_down_button.setEnabled(pen_ok)
+        self._plot_settings.set_plotting_active(plot_active)
 
     def _current_layer(self) -> SvgLayer | None:
         if self._document is None or not self._layers:
