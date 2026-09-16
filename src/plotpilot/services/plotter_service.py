@@ -121,7 +121,13 @@ class PlotterService(QObject):
             return
         self._run_async(self._backend.pen_down, "pen_down")
 
-    def start_plot_layer(self, document: SvgDocument, layer: SvgLayer) -> str | None:
+    def start_plot_layer(
+        self,
+        document: SvgDocument,
+        layer: SvgLayer,
+        *,
+        plot_settings: PlotSettings | None = None,
+    ) -> str | None:
         """Validate and queue a layer plot. Returns an error message or None if started."""
         if self._plot_in_flight:
             return "A plot is already running."
@@ -136,7 +142,9 @@ class PlotterService(QObject):
 
         temp_path = _write_temp_svg(svg_text)
         self._temp_plot_path = temp_path
-        self._active_plot_settings = self._snapshot_plot_settings()
+        self._active_plot_settings = (
+            plot_settings if plot_settings is not None else self._snapshot_plot_settings()
+        )
         self._plot_in_flight = True
         self._set_plot_state(
             PlotPhase.RUNNING,
