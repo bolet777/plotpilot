@@ -43,7 +43,7 @@ flowchart TB
 ## SpecKit alignment
 
 Each user-facing capability is a slice under `specs/NNN-slug/` with its own
-`spec.md`, plan, and tasks. The next planned slice is **001-svg-open** (not started).
+`spec.md`, plan, and tasks. The next planned slice after **001-svg-open** is **002-svg-layers**.
 
 ## Out of scope for foundation
 
