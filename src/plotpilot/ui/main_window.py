@@ -14,13 +14,18 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
+from plotpilot.plotter.axidraw import AxiDrawCliBackend
+from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.layer_service import layers_for_document
+from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
 from plotpilot.ui.preview_widget import LayerPreviewWidget
@@ -29,7 +34,11 @@ from plotpilot.ui.preview_widget import LayerPreviewWidget
 class MainWindow(QMainWindow):
     """PlotPilot main window."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        plotter_backend: PlotterBackend | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("PlotPilot")
         self.resize(900, 560)
@@ -37,6 +46,10 @@ class MainWindow(QMainWindow):
         self._document: SvgDocument | None = None
         self._layers: list[SvgLayer] = []
         self._updating_layers = False
+
+        backend = plotter_backend if plotter_backend is not None else AxiDrawCliBackend()
+        self._plotter_service = PlotterService(backend, parent=self)
+        self._plotter_service.status_changed.connect(self._apply_plotter_status)
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -60,6 +73,38 @@ class MainWindow(QMainWindow):
 
         root_layout.addLayout(content_row, stretch=1)
 
+        plotter_heading = QLabel("Plotter", central)
+        plotter_heading.setStyleSheet("font-weight: bold;")
+        root_layout.addWidget(plotter_heading)
+
+        plotter_row = QHBoxLayout()
+        self._plotter_name_label = QLabel("AxiDraw", central)
+        plotter_row.addWidget(self._plotter_name_label)
+
+        self._plotter_status_label = QLabel("○ Not connected", central)
+        self._plotter_status_label.setWordWrap(True)
+        plotter_row.addWidget(self._plotter_status_label, stretch=1)
+        root_layout.addLayout(plotter_row)
+
+        plotter_buttons = QHBoxLayout()
+        self._pen_up_button = QPushButton("Pen ↑", central)
+        self._pen_up_button.clicked.connect(self._plotter_service.pen_up)
+        plotter_buttons.addWidget(self._pen_up_button)
+
+        self._pen_down_button = QPushButton("Pen ↓", central)
+        self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
+        plotter_buttons.addWidget(self._pen_down_button)
+
+        self._plotter_refresh_button = QPushButton("Refresh", central)
+        self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
+        plotter_buttons.addWidget(self._plotter_refresh_button)
+        plotter_buttons.addStretch(1)
+        root_layout.addLayout(plotter_buttons)
+
+        self._plotter_message_label = QLabel("", central)
+        self._plotter_message_label.setWordWrap(True)
+        root_layout.addWidget(self._plotter_message_label)
+
         self._status_label = QLabel(
             "No SVG loaded. Use File → Open SVG… (⌘O) to open a file.",
             central,
@@ -69,6 +114,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._build_menu()
+        self._apply_plotter_status(self._plotter_service.status)
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -89,6 +135,23 @@ class MainWindow(QMainWindow):
     @property
     def current_preview_svg(self) -> str | None:
         return self._preview.last_svg
+
+    @property
+    def plotter_service(self) -> PlotterService:
+        return self._plotter_service
+
+    def _apply_plotter_status(self, status: PlotterStatus) -> None:
+        if status.state is PlotterConnectionState.CONNECTED:
+            indicator = "● Connected"
+        elif status.state is PlotterConnectionState.ERROR:
+            indicator = "● Error"
+        else:
+            indicator = "○ Not connected"
+        self._plotter_status_label.setText(indicator)
+        self._plotter_message_label.setText(status.message)
+        enabled = status.pen_commands_enabled
+        self._pen_up_button.setEnabled(enabled)
+        self._pen_down_button.setEnabled(enabled)
 
     def _open_svg(self) -> None:
         file_path, _selected_filter = QFileDialog.getOpenFileName(
