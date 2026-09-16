@@ -6,10 +6,11 @@ import logging
 import os
 import tempfile
 import threading
+import weakref
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
 from plotpilot.models.plot_settings import PlotSettings
@@ -25,6 +26,9 @@ from plotpilot.svg.plot_dimensions import PlotDimensionError
 logger = logging.getLogger(__name__)
 
 PLOT_EXIT_WAIT_SECONDS = PLOT_CANCEL_WAIT + 12.0
+
+AUTO_DETECT_INTERVAL_MS = 5000
+AUTO_DETECT_RESUME_DELAY_MS = 1000
 
 
 class _PlotterTaskSignals(QObject):
@@ -67,6 +71,24 @@ class _PlotterTask(QRunnable):
         self.signals.finished.emit(result, self._operation_name)
 
 
+_lifecycle_services: list[weakref.ReferenceType[PlotterService]] = []
+
+
+def _register_plotter_service(service: PlotterService) -> None:
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        return
+    _lifecycle_services.append(weakref.ref(service))
+
+
+def shutdown_all_plotter_services() -> None:
+    """Stop timers and cancel plots for services created during pytest."""
+    for ref in list(_lifecycle_services):
+        service = ref()
+        if service is not None:
+            service.shutdown()
+    _lifecycle_services.clear()
+
+
 class PlotterService(QObject):
     """Runs plotter I/O off the UI thread and publishes status updates."""
 
@@ -86,11 +108,12 @@ class PlotterService(QObject):
         self._settings_service = settings_service
         self._status = PlotterStatus(
             state=PlotterConnectionState.DISCONNECTED,
-            message="Not connected. Use Refresh to detect.",
+            message="Searching for AxiDraw…",
         )
         self._plot_state = PlotState()
         self._detect_in_flight = False
         self._pending_refresh = False
+        self._pending_presence_after_resume = False
         self._operation_in_flight = False
         self._plot_in_flight = False
         self._safe_stop_in_flight = False
@@ -98,6 +121,26 @@ class PlotterService(QObject):
         self._plot_exit_event = threading.Event()
         self._temp_plot_path: Path | None = None
         self._active_plot_settings: PlotSettings | None = None
+        self._extra_hardware_busy: Callable[[], bool] | None = None
+        self._auto_detect_paused = False
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.setInterval(AUTO_DETECT_INTERVAL_MS)
+        self._monitor_timer.timeout.connect(self._on_monitor_timer)
+        self._resume_timer = QTimer(self)
+        self._resume_timer.setSingleShot(True)
+        self._resume_timer.setInterval(AUTO_DETECT_RESUME_DELAY_MS)
+        self._resume_timer.timeout.connect(self._on_auto_detect_resume)
+        _register_plotter_service(self)
+
+    def shutdown(self) -> None:
+        """Stop background work (timers, in-flight plot). Safe when the UI is closing."""
+        self.stop_automatic_monitoring()
+        if self._plot_in_flight:
+            try:
+                self._backend.cancel_plot()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+        self._plot_exit_event.set()
 
     @property
     def status(self) -> PlotterStatus:
@@ -111,13 +154,138 @@ class PlotterService(QObject):
     def backend(self) -> PlotterBackend:
         return self._backend
 
+    def set_extra_hardware_busy(self, predicate: Callable[[], bool] | None) -> None:
+        """Optional hook (e.g. multi-layer job) to suspend background detection."""
+        self._extra_hardware_busy = predicate
+
+    def chain_extra_hardware_busy(self, predicate: Callable[[], bool]) -> None:
+        """Extend the hardware-busy hook without replacing an existing predicate."""
+        previous = self._extra_hardware_busy
+
+        def combined() -> bool:
+            return (previous() if previous is not None else False) or predicate()
+
+        self._extra_hardware_busy = combined
+
+    def start_automatic_monitoring(self) -> None:
+        """Begin passive polling after UI startup (non-blocking)."""
+        self._monitor_timer.setInterval(AUTO_DETECT_INTERVAL_MS)
+        self._resume_timer.setInterval(AUTO_DETECT_RESUME_DELAY_MS)
+        self._auto_detect_paused = False
+        if not self._monitor_timer.isActive():
+            self._monitor_timer.start()
+        QTimer.singleShot(0, self._kick_initial_detection)
+
+    def stop_automatic_monitoring(self) -> None:
+        try:
+            self._monitor_timer.stop()
+            self._resume_timer.stop()
+            self._auto_detect_paused = False
+            self._pending_presence_after_resume = False
+        except RuntimeError:
+            pass
+
+    @property
+    def _automatic_monitoring_active(self) -> bool:
+        try:
+            return self._monitor_timer.isActive()
+        except RuntimeError:
+            return False
+
+    def __del__(self) -> None:
+        try:
+            self.stop_automatic_monitoring()
+        except Exception:  # noqa: BLE001 — best-effort during GC
+            pass
+
     def refresh(self) -> None:
-        if self._plot_in_flight or self._detect_in_flight or self._safe_stop_in_flight:
-            if self._detect_in_flight:
-                self._pending_refresh = True
+        if self._is_hardware_busy():
+            self._pending_refresh = True
+            return
+        self._begin_full_detect()
+
+    def _kick_initial_detection(self) -> None:
+        if self._is_hardware_busy():
+            self._pending_refresh = True
+            return
+        self._begin_full_detect()
+
+    def _begin_full_detect(self) -> None:
+        if self._detect_in_flight:
+            self._pending_refresh = True
             return
         self._detect_in_flight = True
         self._run_async(self._backend.detect, "detect")
+
+    def _begin_presence_detect(self) -> None:
+        if self._detect_in_flight:
+            self._pending_presence_after_resume = True
+            return
+        self._detect_in_flight = True
+        self._run_async(self._backend.detect_presence, "detect_presence")
+
+    def _is_hardware_busy(self) -> bool:
+        if (
+            self._plot_in_flight
+            or self._operation_in_flight
+            or self._safe_stop_in_flight
+            or self._plot_state.is_active
+        ):
+            return True
+        if self._extra_hardware_busy is not None and self._extra_hardware_busy():
+            return True
+        return False
+
+    def _pause_auto_detect_for_hardware(self) -> None:
+        if not self._automatic_monitoring_active:
+            return
+        self._auto_detect_paused = True
+        self._resume_timer.stop()
+
+    def _schedule_auto_detect_resume(self) -> None:
+        if not self._automatic_monitoring_active:
+            self._flush_pending_detection_now()
+            return
+        if not self._resume_timer.isActive():
+            self._resume_timer.start()
+
+    def _flush_pending_detection_now(self) -> None:
+        if self._is_hardware_busy() or self._detect_in_flight:
+            return
+        if self._pending_refresh:
+            self._pending_refresh = False
+            self._begin_full_detect()
+            return
+        if self._pending_presence_after_resume:
+            self._pending_presence_after_resume = False
+            self._begin_presence_detect()
+
+    @Slot()
+    def _on_auto_detect_resume(self) -> None:
+        if self._is_hardware_busy():
+            self._schedule_auto_detect_resume()
+            return
+        self._auto_detect_paused = False
+        if self._pending_refresh:
+            self._pending_refresh = False
+            self._begin_full_detect()
+            return
+        if self._pending_presence_after_resume:
+            self._pending_presence_after_resume = False
+            self._begin_presence_detect()
+            return
+        if self._automatic_monitoring_active and not self._detect_in_flight:
+            self._begin_presence_detect()
+
+    @Slot()
+    def _on_monitor_timer(self) -> None:
+        if self._auto_detect_paused or self._is_hardware_busy():
+            self._pending_presence_after_resume = True
+            return
+        if self._detect_in_flight:
+            self._pending_presence_after_resume = True
+            return
+        self._begin_presence_detect()
 
     def pen_up(self) -> None:
         if (
@@ -166,6 +334,7 @@ class PlotterService(QObject):
             plot_settings if plot_settings is not None else self._snapshot_plot_settings()
         )
         self._plot_in_flight = True
+        self._pause_auto_detect_for_hardware()
         self._plot_exit_event.clear()
         self._set_plot_state(
             PlotPhase.RUNNING,
@@ -186,6 +355,7 @@ class PlotterService(QObject):
         if self._safe_stop_in_flight:
             return
         self._safe_stop_in_flight = True
+        self._pause_auto_detect_for_hardware()
         self._safe_stop_wait_for_plot = self._plot_in_flight
         layer_name = self._plot_state.layer_name
         self._set_plot_state(PlotPhase.STOPPING, layer_name, "Stopping plot…")
@@ -277,6 +447,8 @@ class PlotterService(QObject):
     ) -> None:
         if operation_name != "plot":
             self._operation_in_flight = True
+        if operation_name in ("plot", "pen_up", "pen_down", "safe_stop"):
+            self._pause_auto_detect_for_hardware()
         signals = _PlotterTaskSignals()
         signals.finished.connect(self._on_task_finished)
         task = _PlotterTask(operation, operation_name, signals)
@@ -290,6 +462,7 @@ class PlotterService(QObject):
             self._cleanup_temp_plot_file()
             self._plot_exit_event.set()
             if self._safe_stop_in_flight:
+                self._schedule_auto_detect_resume()
                 return
             plot_result = (
                 result
@@ -310,6 +483,7 @@ class PlotterService(QObject):
                 phase = PlotPhase.FAILED
                 message = f"Plot failed: {plot_result.message}"
             self._set_plot_state(phase, layer_name, message)
+            self._schedule_auto_detect_resume()
             return
 
         if operation_name == "safe_stop":
@@ -329,22 +503,71 @@ class PlotterService(QObject):
             phase = PlotPhase.IDLE if stop_result.cleanup_complete else PlotPhase.CANCELLED
             self._set_plot_state(phase, layer_name, stop_result.message)
             self.safe_stop_finished.emit(stop_result)
+            self._schedule_auto_detect_resume()
             return
 
         self._operation_in_flight = False
-        if operation_name == "detect":
+        if operation_name in ("detect", "detect_presence"):
             self._detect_in_flight = False
-            if isinstance(result, PlotterStatus):
-                self._status = result
-                self.status_changed.emit(result)
-            if self._pending_refresh:
-                self._pending_refresh = False
-                self.refresh()
+            self._operation_in_flight = False
+            if operation_name == "detect" and isinstance(result, PlotterStatus):
+                self._publish_status(result)
+            elif operation_name == "detect_presence" and isinstance(result, PlotterStatus):
+                self._apply_presence_result(result)
+            self._finish_detect_queue(bootstrap_presence=operation_name == "detect")
             return
 
         if isinstance(result, PlotterStatus):
             self._status = result
             self.status_changed.emit(result)
+        self._schedule_auto_detect_resume()
+
+    def _finish_detect_queue(self, *, bootstrap_presence: bool = False) -> None:
+        if self._pending_refresh and not self._is_hardware_busy():
+            self._pending_refresh = False
+            self._begin_full_detect()
+            return
+        if self._pending_presence_after_resume and not self._is_hardware_busy():
+            self._pending_presence_after_resume = False
+            self._begin_presence_detect()
+            return
+        if (
+            bootstrap_presence
+            and self._automatic_monitoring_active
+            and not self._auto_detect_paused
+            and not self._resume_timer.isActive()
+            and not self._is_hardware_busy()
+        ):
+            self._begin_presence_detect()
+
+    def _apply_presence_result(self, result: PlotterStatus) -> None:
+        if result.state is PlotterConnectionState.ERROR:
+            if not _same_connection_state(self._status, result):
+                self._publish_status(result)
+            return
+
+        previous = self._status
+        if result.state is PlotterConnectionState.DISCONNECTED:
+            if previous.state is PlotterConnectionState.CONNECTED:
+                self._publish_status(
+                    PlotterStatus(
+                        state=PlotterConnectionState.DISCONNECTED,
+                        message="Not connected",
+                        backend_version=previous.backend_version,
+                    )
+                )
+            return
+
+        if result.state is PlotterConnectionState.CONNECTED:
+            if previous.state is not PlotterConnectionState.CONNECTED:
+                self._pending_refresh = True
+            return
+
+    def _publish_status(self, status: PlotterStatus) -> None:
+        if _same_connection_state(self._status, status) and self._status.message == status.message:
+            return
+        self._status = status
+        self.status_changed.emit(status)
 
     def _set_plot_state(self, phase: PlotPhase, layer_name: str, message: str) -> None:
         self._plot_state = PlotState(phase=phase, layer_name=layer_name, message=message)
@@ -368,6 +591,10 @@ class PlotterService(QObject):
 
 def _status_connected(status: PlotterStatus | None) -> bool:
     return status is not None and status.state is PlotterConnectionState.CONNECTED
+
+
+def _same_connection_state(previous: PlotterStatus, updated: PlotterStatus) -> bool:
+    return previous.state is updated.state
 
 
 def _call_manual(

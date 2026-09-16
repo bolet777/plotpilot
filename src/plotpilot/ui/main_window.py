@@ -167,6 +167,11 @@ class MainWindow(QMainWindow):
         self._apply_plot_state(self._plotter_service.plot_state)
         self._apply_multi_layer_job(self._multi_layer_service.job)
         self._update_plot_controls()
+        self._plotter_service.start_automatic_monitoring()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        self._plotter_service.shutdown()
+        super().closeEvent(event)
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")

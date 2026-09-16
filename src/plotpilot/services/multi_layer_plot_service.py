@@ -32,6 +32,7 @@ class MultiLayerPlotService(QObject):
     def __init__(self, plotter_service: PlotterService, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._plotter = plotter_service
+        plotter_service.chain_extra_hardware_busy(self._plotter_hardware_busy)
         self._job = idle_multi_layer_job()
         self._document: SvgDocument | None = None
         self._layer_by_id: dict[str, SvgLayer] = {}
@@ -101,6 +102,9 @@ class MultiLayerPlotService(QObject):
             self._continue_in_flight = False
             self._fail_job(error)
         return error
+
+    def _plotter_hardware_busy(self) -> bool:
+        return self._job.is_active or self._awaiting_stop_cleanup
 
     def stop_job(self) -> None:
         if self._job.state in (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -32,8 +33,11 @@ class FakePlotterBackend:
     disable_xy_result: PlotterStatus | None = None
     plot_result: PlotResult | None = None
     plot_block_until_cancel: bool = False
+    plot_block_timeout_seconds: float | None = None
     plot_delay_seconds: float = 0.0
     detect_calls: int = 0
+    detect_presence_calls: int = 0
+    detect_presence_result: PlotterStatus | None = None
     pen_up_calls: int = 0
     pen_down_calls: int = 0
     walk_home_calls: int = 0
@@ -48,6 +52,12 @@ class FakePlotterBackend:
 
     def detect(self) -> PlotterStatus:
         self.detect_calls += 1
+        return self.detect_result
+
+    def detect_presence(self) -> PlotterStatus:
+        self.detect_presence_calls += 1
+        if self.detect_presence_result is not None:
+            return self.detect_presence_result
         return self.detect_result
 
     def pen_up(self) -> PlotterStatus:
@@ -101,8 +111,17 @@ class FakePlotterBackend:
         if self.plot_delay_seconds > 0:
             time.sleep(self.plot_delay_seconds)
         if self.plot_block_until_cancel:
+            timeout = self.plot_block_timeout_seconds
+            if timeout is None and os.getenv("PYTEST_CURRENT_TEST"):
+                timeout = 30.0
+            deadline = time.monotonic() + timeout if timeout is not None else None
             while not self._cancel_event.wait(0.02):
-                continue
+                if deadline is not None and time.monotonic() >= deadline:
+                    return PlotResult(
+                        success=False,
+                        cancelled=True,
+                        message="Plot stopped (block timeout)",
+                    )
             self.manual_sequence.append("plot_exited")
             return PlotResult(
                 success=False,
