@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
@@ -26,6 +27,7 @@ from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.layer_service import layers_for_document
+from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.settings_service import SettingsService
@@ -62,6 +64,9 @@ class MainWindow(QMainWindow):
         )
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
         self._plotter_service.plot_state_changed.connect(self._apply_plot_state)
+        self._multi_layer_service = MultiLayerPlotService(self._plotter_service, parent=self)
+        self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
+        self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -74,8 +79,9 @@ class MainWindow(QMainWindow):
 
         self._layers_list = QListWidget(central)
         self._layers_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self._layers_list.setMinimumWidth(180)
+        self._layers_list.setMinimumWidth(220)
         self._layers_list.currentRowChanged.connect(self._on_layer_row_changed)
+        self._layers_list.itemChanged.connect(self._on_layer_item_changed)
         left_column.addWidget(self._layers_list, stretch=1)
 
         content_row.addLayout(left_column, stretch=0)
@@ -115,10 +121,19 @@ class MainWindow(QMainWindow):
         self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
         plotter_buttons.addWidget(self._plot_layer_button)
 
+        self._plot_checked_button = QPushButton("Plot Checked Layers", central)
+        self._plot_checked_button.clicked.connect(self._on_plot_checked_layers)
+        plotter_buttons.addWidget(self._plot_checked_button)
+
         self._plot_stop_button = QPushButton("Stop", central)
-        self._plot_stop_button.clicked.connect(self._plotter_service.cancel_plot)
+        self._plot_stop_button.clicked.connect(self._on_stop_plot)
         self._plot_stop_button.setEnabled(False)
         plotter_buttons.addWidget(self._plot_stop_button)
+
+        self._multi_continue_button = QPushButton("Continue", central)
+        self._multi_continue_button.clicked.connect(self._on_multi_continue)
+        self._multi_continue_button.setVisible(False)
+        plotter_buttons.addWidget(self._multi_continue_button)
 
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
@@ -129,6 +144,11 @@ class MainWindow(QMainWindow):
         self._plot_activity_label = QLabel("", central)
         self._plot_activity_label.setWordWrap(True)
         root_layout.addWidget(self._plot_activity_label)
+
+        self._pen_change_label = QLabel("", central)
+        self._pen_change_label.setWordWrap(True)
+        self._pen_change_label.setVisible(False)
+        root_layout.addWidget(self._pen_change_label)
 
         self._plotter_message_label = QLabel("", central)
         self._plotter_message_label.setWordWrap(True)
@@ -145,15 +165,16 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._apply_plotter_status(self._plotter_service.status)
         self._apply_plot_state(self._plotter_service.plot_state)
+        self._apply_multi_layer_job(self._multi_layer_service.job)
         self._update_plot_controls()
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
 
-        open_action = QAction("Open SVG…", self)
-        open_action.setShortcut(QKeySequence.StandardKey.Open)
-        open_action.triggered.connect(self._open_svg)
-        file_menu.addAction(open_action)
+        self._open_svg_action = QAction("Open SVG…", self)
+        self._open_svg_action.setShortcut(QKeySequence.StandardKey.Open)
+        self._open_svg_action.triggered.connect(self._open_svg)
+        file_menu.addAction(self._open_svg_action)
 
     @property
     def document(self) -> SvgDocument | None:
@@ -171,6 +192,10 @@ class MainWindow(QMainWindow):
     def plotter_service(self) -> PlotterService:
         return self._plotter_service
 
+    @property
+    def multi_layer_service(self) -> MultiLayerPlotService:
+        return self._multi_layer_service
+
     def _apply_plotter_status(self, status: PlotterStatus) -> None:
         if status.state is PlotterConnectionState.CONNECTED:
             indicator = "● Connected"
@@ -179,11 +204,16 @@ class MainWindow(QMainWindow):
         else:
             indicator = "○ Not connected"
         self._plotter_status_label.setText(indicator)
-        if not self._plotter_service.plot_state.is_active:
+        plotter_idle = not self._plotter_service.plot_state.is_active
+        job_idle = not self._multi_layer_service.job.is_active
+        if plotter_idle and job_idle:
             self._plotter_message_label.setText(status.message)
         self._update_plot_controls()
 
     def _apply_plot_state(self, state: PlotState) -> None:
+        job = self._multi_layer_service.job
+        if job.is_active:
+            return
         if state.phase is PlotPhase.RUNNING:
             self._plot_activity_label.setText(state.message)
         elif state.phase is PlotPhase.IDLE:
@@ -192,22 +222,110 @@ class MainWindow(QMainWindow):
             self._plot_activity_label.setText(state.message)
         self._update_plot_controls()
 
+    def _apply_multi_layer_job(self, job: MultiLayerPlotJob) -> None:
+        if job.state is MultiLayerJobState.IDLE:
+            self._pen_change_label.setVisible(False)
+            self._multi_continue_button.setVisible(False)
+            return
+
+        if job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
+            self._plot_activity_label.setText(job.progress_label)
+            self._update_pen_change_panel(job)
+            self._pen_change_label.setVisible(True)
+            self._multi_continue_button.setVisible(True)
+        elif job.state is MultiLayerJobState.PLOTTING:
+            self._pen_change_label.setVisible(False)
+            self._multi_continue_button.setVisible(False)
+            self._plot_activity_label.setText(job.progress_label)
+        else:
+            self._pen_change_label.setVisible(False)
+            self._multi_continue_button.setVisible(False)
+            self._plot_activity_label.setText(job.message)
+        self._update_plot_controls()
+
+    def _update_pen_change_panel(self, job: MultiLayerPlotJob) -> None:
+        nxt = job.current_layer
+        if nxt is None:
+            self._pen_change_label.setText("")
+            return
+        swatch = _color_swatch_text(nxt.representative_color)
+        if nxt.representative_color:
+            body = (
+                f"Layer {job.completed_count} complete\n\n"
+                f"Next layer:\n{swatch} {nxt.name}\n\n"
+                f"Change the pen to {nxt.name}."
+            )
+        else:
+            human = job.current_index + 1
+            body = (
+                f"Layer {job.completed_count} complete\n\n"
+                f"Next layer:\nLayer {human}\n\n"
+                f"Change the pen for the next layer."
+            )
+        self._pen_change_label.setText(body)
+
+    def _on_pen_change_required(self, _next_layer: object) -> None:
+        self._apply_multi_layer_job(self._multi_layer_service.job)
+
     def _update_plot_controls(self) -> None:
         plot_active = self._plotter_service.plot_state.is_active
+        job = self._multi_layer_service.job
+        job_active = job.is_active
+        job_blocks_ui = job_active or job.state in (
+            MultiLayerJobState.COMPLETED,
+            MultiLayerJobState.CANCELLED,
+            MultiLayerJobState.ERROR,
+        )
         layer = self._current_layer()
-        can_plot = (
+        checked = self._checked_layers()
+        can_start = (
             self._document is not None
-            and layer is not None
             and self._plotter_service.status.is_connected
             and not plot_active
+            and not job_active
         )
-        self._plot_layer_button.setEnabled(can_plot)
-        self._plot_stop_button.setEnabled(plot_active)
-        self._plotter_refresh_button.setEnabled(not plot_active)
-        pen_ok = self._plotter_service.status.pen_commands_enabled and not plot_active
+        can_plot_single = can_start and layer is not None
+        can_plot_multi = can_start and len(checked) >= 1
+        self._plot_layer_button.setEnabled(can_plot_single)
+        self._plot_checked_button.setEnabled(can_plot_multi)
+        stop_enabled = plot_active or job_active
+        self._plot_stop_button.setEnabled(stop_enabled)
+        if job_active and job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
+            self._plot_stop_button.setText("Stop Job")
+        else:
+            self._plot_stop_button.setText("Stop")
+        self._multi_continue_button.setEnabled(
+            job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE and not plot_active
+        )
+        self._plotter_refresh_button.setEnabled(not plot_active and not job_active)
+        pen_ok = (
+            self._plotter_service.status.pen_commands_enabled and not plot_active and not job_active
+        )
         self._pen_up_button.setEnabled(pen_ok)
         self._pen_down_button.setEnabled(pen_ok)
-        self._plot_settings.set_plotting_active(plot_active)
+        settings_locked = plot_active or job_active
+        self._plot_settings.set_plotting_active(settings_locked)
+        self._open_svg_action.setEnabled(not job_active)
+        allow_preview = job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE
+        self._layers_list.setEnabled(not job_active or allow_preview)
+        self._updating_layers = True
+        for row in range(self._layers_list.count()):
+            item = self._layers_list.item(row)
+            if item is None:
+                continue
+            flags = item.flags()
+            if job_active:
+                item.setFlags(flags & ~Qt.ItemFlag.ItemIsUserCheckable)
+            else:
+                item.setFlags(flags | Qt.ItemFlag.ItemIsUserCheckable)
+        self._updating_layers = False
+        if job_blocks_ui and job.state in (
+            MultiLayerJobState.COMPLETED,
+            MultiLayerJobState.CANCELLED,
+            MultiLayerJobState.ERROR,
+        ):
+            self._open_svg_action.setEnabled(True)
+            self._layers_list.setEnabled(True)
 
     def _current_layer(self) -> SvgLayer | None:
         if self._document is None or not self._layers:
@@ -217,8 +335,22 @@ class MainWindow(QMainWindow):
             return None
         return self._layers[row]
 
+    def _checked_layers(self) -> list[SvgLayer]:
+        if not self._layers:
+            return []
+        selected: list[SvgLayer] = []
+        for row in range(self._layers_list.count()):
+            item = self._layers_list.item(row)
+            if item is None:
+                continue
+            if item.checkState() is not Qt.CheckState.Checked:
+                continue
+            if 0 <= row < len(self._layers):
+                selected.append(self._layers[row])
+        return selected
+
     def _on_plot_selected_layer(self) -> None:
-        if self._plotter_service.plot_state.is_active:
+        if self._plotter_service.plot_state.is_active or self._multi_layer_service.job.is_active:
             return
         layer = self._current_layer()
         document = self._document
@@ -240,7 +372,53 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Cannot plot", error)
             self._update_plot_controls()
 
+    def _on_plot_checked_layers(self) -> None:
+        if self._plotter_service.plot_state.is_active or self._multi_layer_service.job.is_active:
+            return
+        document = self._document
+        layers = self._checked_layers()
+        if document is None or not layers:
+            return
+
+        order_lines = "\n".join(
+            f"{index}. {layer.name}" for index, layer in enumerate(layers, start=1)
+        )
+        confirm = QMessageBox.question(
+            self,
+            "Plot checked layers",
+            (
+                f"Plot {len(layers)} layers?\n\n"
+                "The AxiDraw will move physically.\n"
+                "PlotPilot will pause between each layer so you can change pens.\n\n"
+                f"Order:\n{order_lines}"
+            ),
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Ok:
+            return
+
+        settings = self._settings_service.plot_settings
+        error = self._multi_layer_service.start_job(document, layers, settings=settings)
+        if error is not None:
+            QMessageBox.warning(self, "Cannot plot", error)
+        self._update_plot_controls()
+
+    def _on_multi_continue(self) -> None:
+        error = self._multi_layer_service.continue_after_pen_change()
+        if error is not None:
+            QMessageBox.warning(self, "Cannot continue", error)
+        self._update_plot_controls()
+
+    def _on_stop_plot(self) -> None:
+        if self._multi_layer_service.job.is_active:
+            self._multi_layer_service.stop_job()
+            return
+        self._plotter_service.cancel_plot()
+
     def _open_svg(self) -> None:
+        if self._multi_layer_service.job.is_active:
+            return
         file_path, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Open SVG…",
@@ -272,10 +450,12 @@ class MainWindow(QMainWindow):
         self._updating_layers = True
         self._layers_list.blockSignals(True)
         self._layers_list.clear()
-        for layer in self._layers:
-            item = QListWidgetItem(layer.name)
+        for index, layer in enumerate(self._layers, start=1):
+            item = QListWidgetItem(f"{index}  {layer.name}")
             item.setIcon(_layer_swatch_icon(layer.representative_color))
             item.setData(Qt.ItemDataRole.UserRole, layer.layer_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
             self._layers_list.addItem(item)
         if self._layers_list.count() > 0:
             self._layers_list.setCurrentRow(0)
@@ -288,6 +468,14 @@ class MainWindow(QMainWindow):
         if self._updating_layers:
             return
         self._update_preview_for_current_layer()
+        self._update_plot_controls()
+
+    def _on_layer_item_changed(self, item: QListWidgetItem) -> None:
+        if self._updating_layers:
+            return
+        if self._multi_layer_service.job.is_active:
+            return
+        _ = item
         self._update_plot_controls()
 
     def _update_preview_for_current_layer(self) -> None:
@@ -308,6 +496,14 @@ class MainWindow(QMainWindow):
         """Replace the active document and layer list (used after successful load)."""
         self._apply_document(document)
         self._update_plot_controls()
+
+
+def _color_swatch_text(color: str | None) -> str:
+    if color:
+        qcolor = QColor(color)
+        if qcolor.isValid():
+            return "●"
+    return "●"
 
 
 def _layer_swatch_icon(color: str | None) -> QIcon:
