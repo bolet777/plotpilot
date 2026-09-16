@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     viewBox="0 0 100 100">
+  <g inkscape:groupmode="layer" inkscape:label="Transformed"
+     transform="translate(10, 10)">
+    <path d="M0 0 L5 5" stroke="#123456" stroke-width="2"/>
+  </g>
+</svg>

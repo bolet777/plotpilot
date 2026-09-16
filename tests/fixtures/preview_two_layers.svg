@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     viewBox="0 0 100 100"
+     width="100"
+     height="100">
+  <g inkscape:groupmode="layer" inkscape:label="Layer A">
+    <path id="only-in-layer-a" d="M0 0 L10 10" stroke="#000000"/>
+  </g>
+  <g inkscape:groupmode="layer" inkscape:label="Layer B">
+    <path id="only-in-layer-b" d="M20 20 L30 30" stroke="#000000"/>
+  </g>
+</svg>
