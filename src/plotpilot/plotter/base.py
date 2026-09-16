@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plotter_status import PlotterStatus
 
 
@@ -19,3 +21,9 @@ class PlotterBackend(Protocol):
 
     def pen_down(self) -> PlotterStatus:
         """Lower pen; returns updated status."""
+
+    def plot_svg(self, svg_path: Path) -> PlotResult:
+        """Plot an SVG file (blocking until complete, error, or cancel)."""
+
+    def cancel_plot(self) -> None:
+        """Request cancellation of an in-flight plot_svg call."""
