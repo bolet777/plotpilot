@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from plotpilot.models.svg_document import SvgDocument
+from plotpilot.models.svg_layer import LayerSource
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.svg.layers import extract_layers, is_inkscape_layer
 from plotpilot.svg.parse import parse_svg_text
@@ -139,8 +140,9 @@ def test_ordinary_groups_without_inkscape_layers() -> None:
     document = _document_from_fixture("ordinary_groups.svg")
     layers = extract_layers(document)
     assert len(layers) == 1
-    assert layers[0].name == "ordinary_groups.svg"
-    assert layers[0].element.tag.endswith("svg") or "svg" in layers[0].element.tag
+    assert layers[0].name == "Outer"
+    assert layers[0].layer_id == "outer"
+    assert layers[0].source is LayerSource.ROOT_GROUP
 
 
 def test_no_groups_synthetic_layer() -> None:
@@ -169,6 +171,106 @@ def test_inkscape_layer_detection_uses_namespace_not_prefix() -> None:
     assert len(layer_groups) == 1
     layers = extract_layers(_document_from_text(text))
     assert layers[0].name == "From prefixed NS"
+
+
+def test_three_root_groups_become_three_layers() -> None:
+    document = _document_from_fixture("three_root_groups.svg")
+    layers = extract_layers(document)
+    assert len(layers) == 3
+    assert [layer.name for layer in layers] == ["Orange", "Cyan", "Yellow"]
+    assert all(layer.source is LayerSource.ROOT_GROUP for layer in layers)
+
+
+def test_root_group_order_preserved() -> None:
+    document = _document_from_fixture("three_root_groups.svg")
+    layers = extract_layers(document)
+    assert [layer.layer_id for layer in layers] == ["orange", "cyan", "yellow"]
+    assert [layer.order for layer in layers] == [0, 1, 2]
+
+
+def test_nested_groups_not_extra_root_layers() -> None:
+    document = _document_from_fixture("root_groups_nested.svg")
+    layers = extract_layers(document)
+    assert len(layers) == 1
+    assert layers[0].layer_id == "parent"
+    assert layers[0].source is LayerSource.ROOT_GROUP
+
+
+def test_root_group_inkscape_label_over_id() -> None:
+    text = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+  <g id="plain-id" inkscape:label="Friendly Label">
+    <path d="M0 0 L1 1"/>
+  </g>
+</svg>"""
+    layers = extract_layers(_document_from_text(text))
+    assert layers[0].name == "Friendly Label"
+    assert layers[0].layer_id == "plain-id"
+
+
+def test_root_group_id_humanized_display_name() -> None:
+    text = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg">
+  <g id="orange-lines">
+    <path d="M0 0 L1 1"/>
+  </g>
+</svg>"""
+    layers = extract_layers(_document_from_text(text))
+    assert layers[0].name == "Orange lines"
+    assert layers[0].layer_id == "orange-lines"
+
+
+def test_root_group_representative_colors() -> None:
+    document = _document_from_fixture("three_root_groups.svg")
+    layers = extract_layers(document)
+    assert layers[0].representative_color == "#ff8800"
+    assert layers[1].representative_color == "#00cccc"
+    assert layers[2].representative_color == "#ffff00"
+
+
+def test_empty_root_groups_ignored() -> None:
+    document = _document_from_fixture("root_groups_with_empty.svg")
+    layers = extract_layers(document)
+    assert len(layers) == 1
+    assert layers[0].layer_id == "visible"
+
+
+def test_defs_not_exposed_as_layer() -> None:
+    document = _document_from_fixture("three_root_groups.svg")
+    layers = extract_layers(document)
+    assert all(layer.layer_id != "g1" for layer in layers)
+    assert len(layers) == 3
+
+
+def test_inkscape_layers_take_priority_over_root_groups() -> None:
+    text = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+  <g id="root-only">
+    <path d="M0 0"/>
+  </g>
+  <g inkscape:groupmode="layer" inkscape:label="Inkscape Only">
+    <path d="M1 1"/>
+  </g>
+</svg>"""
+    layers = extract_layers(_document_from_text(text))
+    assert len(layers) == 1
+    assert layers[0].name == "Inkscape Only"
+    assert layers[0].source is LayerSource.INKSCAPE
+
+
+def test_synthetic_document_layer_source() -> None:
+    document = _document_from_fixture("no_groups.svg")
+    layers = extract_layers(document)
+    assert len(layers) == 1
+    assert layers[0].source is LayerSource.DOCUMENT
+
+
+def test_inkscape_layers_have_inkscape_source() -> None:
+    document = _document_from_fixture("five_inkscape_layers.svg")
+    layers = extract_layers(document)
+    assert all(layer.source is LayerSource.INKSCAPE for layer in layers)
 
 
 def test_drawable_count_excludes_defs() -> None:

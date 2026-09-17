@@ -17,6 +17,9 @@ class PlotterBackend(Protocol):
     def detect(self) -> PlotterStatus:
         """Probe hardware without XY plotting commands."""
 
+    def detect_presence(self) -> PlotterStatus:
+        """Passive presence check (must not open a serial session)."""
+
     def pen_up(self) -> PlotterStatus:
         """Raise pen; returns updated status."""
 

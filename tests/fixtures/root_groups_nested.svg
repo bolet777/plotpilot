@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <g id="parent">
+    <g id="nested-only">
+      <path id="only-in-nested" stroke="#111111" d="M0 0 L1 1"/>
+    </g>
+  </g>
+</svg>

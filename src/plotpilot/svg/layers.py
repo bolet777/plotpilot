@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from xml.etree.ElementTree import Element
 
 from plotpilot.models.svg_document import SvgDocument
-from plotpilot.models.svg_layer import SvgLayer
+from plotpilot.models.svg_layer import LayerSource, SvgLayer
 from plotpilot.svg.parse import is_svg_root
 
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
@@ -51,6 +52,34 @@ def _layer_display_name(element: Element, fallback_index: int) -> str:
     if element_id and element_id.strip():
         return element_id.strip()
     return f"Layer {fallback_index}"
+
+
+def _humanize_id(element_id: str) -> str:
+    stripped = element_id.strip()
+    if not stripped:
+        return stripped
+    if re.search(r"[-_]", stripped):
+        result = " ".join(re.split(r"[-_]+", stripped))
+    else:
+        result = stripped
+    return result[0].upper() + result[1:] if result else result
+
+
+def _root_group_display_name(element: Element, fallback_index: int) -> str:
+    label = _inkscape_attr(element, "label")
+    if label and label.strip():
+        return label.strip()
+    aria = element.get("aria-label")
+    if aria and aria.strip():
+        return aria.strip()
+    element_id = element.get("id")
+    if element_id and element_id.strip():
+        return _humanize_id(element_id)
+    return f"Group {fallback_index}"
+
+
+def _is_meaningful_root_group(element: Element, document_root: Element) -> bool:
+    return _count_drawables(element, document_root) > 0
 
 
 def _layer_stable_id(element: Element, order: int) -> str:
@@ -140,14 +169,23 @@ def _count_drawables(layer_element: Element, document_root: Element) -> int:
     return count
 
 
-def _build_layer(element: Element, order: int, name_index: int, document_root: Element) -> SvgLayer:
+def _build_layer(
+    element: Element,
+    order: int,
+    name_index: int,
+    document_root: Element,
+    *,
+    source: LayerSource,
+    display_name_fn=_layer_display_name,
+) -> SvgLayer:
     return SvgLayer(
         layer_id=_layer_stable_id(element, order),
-        name=_layer_display_name(element, name_index),
+        name=display_name_fn(element, name_index),
         order=order,
         element=element,
         representative_color=_representative_color(element, document_root),
         drawable_count=_count_drawables(element, document_root),
+        source=source,
     )
 
 
@@ -166,19 +204,12 @@ def _synthetic_document_layer(document: SvgDocument) -> SvgLayer:
         element=root,
         representative_color=_representative_color(root, root),
         drawable_count=_count_drawables(root, root),
+        source=LayerSource.DOCUMENT,
     )
 
 
-def extract_layers(document: SvgDocument) -> list[SvgLayer]:
-    """Return Inkscape layers in document order, or one synthetic document layer."""
-    root = document.root
-    if not is_svg_root(root):
-        return [_synthetic_document_layer(document)]
-
+def _extract_inkscape_layers(root: Element) -> list[SvgLayer]:
     layer_elements = [el for el in root.iter() if is_inkscape_layer(el)]
-    if not layer_elements:
-        return [_synthetic_document_layer(document)]
-
     layers: list[SvgLayer] = []
     unnamed_counter = 0
     for order, element in enumerate(layer_elements):
@@ -189,5 +220,62 @@ def extract_layers(document: SvgDocument) -> list[SvgLayer]:
             name_index = unnamed_counter
         else:
             name_index = order + 1
-        layers.append(_build_layer(element, order, name_index, root))
+        layers.append(
+            _build_layer(
+                element,
+                order,
+                name_index,
+                root,
+                source=LayerSource.INKSCAPE,
+            )
+        )
     return layers
+
+
+def _extract_root_group_layers(root: Element) -> list[SvgLayer]:
+    group_elements: list[Element] = []
+    for child in root:
+        if _local_tag(child.tag) != "g":
+            continue
+        if _is_meaningful_root_group(child, root):
+            group_elements.append(child)
+
+    layers: list[SvgLayer] = []
+    unnamed_counter = 0
+    for order, element in enumerate(group_elements):
+        has_label = bool((_inkscape_attr(element, "label") or "").strip())
+        has_aria = bool((element.get("aria-label") or "").strip())
+        has_id = bool((element.get("id") or "").strip())
+        if not has_label and not has_aria and not has_id:
+            unnamed_counter += 1
+            name_index = unnamed_counter
+        else:
+            name_index = order + 1
+        layers.append(
+            _build_layer(
+                element,
+                order,
+                name_index,
+                root,
+                source=LayerSource.ROOT_GROUP,
+                display_name_fn=_root_group_display_name,
+            )
+        )
+    return layers
+
+
+def extract_layers(document: SvgDocument) -> list[SvgLayer]:
+    """Return layers: Inkscape, else root groups, else one synthetic document layer."""
+    root = document.root
+    if not is_svg_root(root):
+        return [_synthetic_document_layer(document)]
+
+    inkscape_layers = _extract_inkscape_layers(root)
+    if inkscape_layers:
+        return inkscape_layers
+
+    root_group_layers = _extract_root_group_layers(root)
+    if root_group_layers:
+        return root_group_layers
+
+    return [_synthetic_document_layer(document)]

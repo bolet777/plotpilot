@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -86,8 +87,50 @@ class MainWindow(QMainWindow):
 
         content_row.addLayout(left_column, stretch=0)
 
+        preview_column = QVBoxLayout()
+        preview_column.setSpacing(6)
+
+        self._open_svg_persistent_button = QPushButton("Open SVG…", central)
+        self._open_svg_persistent_button.setVisible(False)
+        preview_column.addWidget(
+            self._open_svg_persistent_button,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
+
+        self._preview_stack = QStackedWidget(central)
+        self._preview_empty_page = QWidget(central)
+        empty_layout = QVBoxLayout(self._preview_empty_page)
+        empty_layout.addStretch(1)
+        empty_heading = QLabel("No SVG loaded", self._preview_empty_page)
+        empty_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_heading.setStyleSheet("font-size: 14px; color: #444444;")
+        empty_layout.addWidget(empty_heading)
+        empty_layout.addSpacing(12)
+        self._open_svg_empty_button = QPushButton("Open SVG…", self._preview_empty_page)
+        empty_layout.addWidget(
+            self._open_svg_empty_button,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+        open_shortcut = QKeySequence(QKeySequence.StandardKey.Open).toString(
+            QKeySequence.SequenceFormat.NativeText,
+        )
+        empty_shortcut_hint = QLabel(
+            f"or press {open_shortcut}",
+            self._preview_empty_page,
+        )
+        empty_shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_shortcut_hint.setStyleSheet("color: #666666;")
+        empty_layout.addWidget(empty_shortcut_hint)
+        empty_layout.addStretch(1)
+
         self._preview = LayerPreviewWidget(central)
-        content_row.addWidget(self._preview, stretch=1)
+        self._preview_stack.addWidget(self._preview_empty_page)
+        self._preview_stack.addWidget(self._preview)
+        preview_column.addWidget(self._preview_stack, stretch=1)
+
+        preview_column_host = QWidget(central)
+        preview_column_host.setLayout(preview_column)
+        content_row.addWidget(preview_column_host, stretch=1)
 
         root_layout.addLayout(content_row, stretch=1)
 
@@ -154,19 +197,26 @@ class MainWindow(QMainWindow):
         self._plotter_message_label.setWordWrap(True)
         root_layout.addWidget(self._plotter_message_label)
 
-        self._status_label = QLabel(
-            "No SVG loaded. Use File → Open SVG… (⌘O) to open a file.",
-            central,
-        )
+        self._status_label = QLabel("", central)
         self._status_label.setWordWrap(True)
         root_layout.addWidget(self._status_label)
 
         self.setCentralWidget(central)
         self._build_menu()
+        self._open_svg_empty_button.clicked.connect(self._open_svg_action.trigger)
+        self._open_svg_persistent_button.clicked.connect(self._open_svg_action.trigger)
+        self._open_svg_action.enabledChanged.connect(self._open_svg_empty_button.setEnabled)
+        self._open_svg_action.enabledChanged.connect(self._open_svg_persistent_button.setEnabled)
+        self._sync_preview_empty_state()
         self._apply_plotter_status(self._plotter_service.status)
         self._apply_plot_state(self._plotter_service.plot_state)
         self._apply_multi_layer_job(self._multi_layer_service.job)
         self._update_plot_controls()
+        self._plotter_service.start_automatic_monitoring()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        self._plotter_service.shutdown()
+        super().closeEvent(event)
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -449,10 +499,16 @@ class MainWindow(QMainWindow):
 
         self.set_document(document)
 
+    def _sync_preview_empty_state(self) -> None:
+        has_document = self._document is not None
+        self._preview_stack.setCurrentIndex(1 if has_document else 0)
+        self._open_svg_persistent_button.setVisible(has_document)
+
     def _apply_document(self, document: SvgDocument) -> None:
         self._document = document
         self._layers = layers_for_document(document)
         self._status_label.setText(document.name)
+        self._sync_preview_empty_state()
         self._refresh_layers_list()
 
     def _refresh_layers_list(self) -> None:

@@ -18,6 +18,7 @@ CliRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
 
 DEFAULT_CLI = "axicli"
 DEFAULT_TIMEOUT = 30.0
+PRESENCE_TIMEOUT = 8.0
 PLOT_CANCEL_WAIT = 8.0
 
 _INSTALL_HINT = (
@@ -127,6 +128,61 @@ class AxiDrawCliBackend:
         return PlotterStatus(
             state=PlotterConnectionState.CONNECTED,
             message=message,
+            backend_version=version_text,
+        )
+
+    def detect_presence(self) -> PlotterStatus:
+        """List attached units via passive USB scan (no fw_version / serial open)."""
+        cli = self._resolve_cli()
+        if cli is None:
+            return PlotterStatus(
+                state=PlotterConnectionState.ERROR,
+                message=f"AxiDraw CLI not found. {_INSTALL_HINT}",
+            )
+
+        version_text: str | None = None
+        try:
+            version_proc = self._runner([cli, "--version"], PRESENCE_TIMEOUT)
+            version_text = _combined_output(version_proc).splitlines()[0] if version_proc else None
+        except (OSError, subprocess.TimeoutExpired):
+            version_text = None
+
+        try:
+            names_proc = self._runner(
+                [cli, "-m", "manual", "-M", "list_names"],
+                PRESENCE_TIMEOUT,
+            )
+        except FileNotFoundError as exc:
+            return PlotterStatus(
+                state=PlotterConnectionState.ERROR,
+                message=str(exc),
+                backend_version=version_text,
+            )
+        except subprocess.TimeoutExpired:
+            return PlotterStatus(
+                state=PlotterConnectionState.ERROR,
+                message="Timed out while scanning for AxiDraw devices.",
+                backend_version=version_text,
+            )
+
+        names_blob = _combined_output(names_proc)
+        if names_proc.returncode != 0:
+            detail = names_blob.splitlines()[0] if names_blob else "Device scan failed"
+            return PlotterStatus(
+                state=PlotterConnectionState.ERROR,
+                message=detail,
+                backend_version=version_text,
+            )
+
+        if _list_names_indicates_presence(names_blob):
+            return PlotterStatus(
+                state=PlotterConnectionState.CONNECTED,
+                message="Connected",
+                backend_version=version_text,
+            )
+        return PlotterStatus(
+            state=PlotterConnectionState.DISCONNECTED,
+            message="Not connected",
             backend_version=version_text,
         )
 
@@ -246,10 +302,14 @@ def _parse_list_names(text: str) -> list[str]:
     if not text:
         return []
     lowered = text.lower()
-    if "no named" in lowered:
+    if "no named" in lowered or "no axidraw" in lowered:
         return []
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return lines
+    return [line for line in lines if not line.lower().startswith("list of attached")]
+
+
+def _list_names_indicates_presence(text: str) -> bool:
+    return len(_parse_list_names(text)) > 0
 
 
 def _extract_firmware(blob: str) -> str | None:
