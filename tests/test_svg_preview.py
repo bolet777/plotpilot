@@ -90,6 +90,16 @@ def test_synthetic_layer_uses_full_document() -> None:
     assert preview == document.raw_text
 
 
+def test_root_group_preview_isolates_selected_group() -> None:
+    document = _load("three_root_groups.svg")
+    layers = layers_for_document(document)
+    preview = build_layer_preview_svg(document, layers[0])
+    assert "#ff8800" in preview
+    assert "#00cccc" not in preview
+    assert "#ffff00" not in preview
+    assert "g1" in preview
+
+
 def test_styles_stroke_fill_intact() -> None:
     document = _load("preview_layer_transform.svg")
     layer = layers_for_document(document)[0]

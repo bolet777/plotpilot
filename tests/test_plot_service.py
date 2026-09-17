@@ -33,6 +33,23 @@ def test_original_document_unchanged_after_plot_svg_build() -> None:
     assert document.raw_text == before
 
 
+def test_root_group_plot_svg_contains_only_selected_group() -> None:
+    document = load_svg_from_path(FIXTURES / "root_groups_plot.svg")
+    layers = layers_for_document(document)
+    svg_a = plot_svg_for_layer(document, layers[0])
+    assert "only-in-group-a" in svg_a
+    assert "only-in-group-b" not in svg_a
+
+
+def test_multi_root_group_plot_isolation() -> None:
+    document = load_svg_from_path(FIXTURES / "root_groups_plot.svg")
+    layers = layers_for_document(document)
+    assert len(layers) == 2
+    svg_b = plot_svg_for_layer(document, layers[1])
+    assert "only-in-group-b" in svg_b
+    assert "only-in-group-a" not in svg_b
+
+
 def test_validate_accepts_fixture_sizes() -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)

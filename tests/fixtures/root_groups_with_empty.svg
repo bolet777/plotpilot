@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <g id="empty-group"/>
+  <g id="metadata-only">
+    <title>Not a layer</title>
+    <desc>Also not drawable</desc>
+  </g>
+  <g id="visible">
+    <path stroke="#222222" d="M0 0 L2 2"/>
+  </g>
+</svg>

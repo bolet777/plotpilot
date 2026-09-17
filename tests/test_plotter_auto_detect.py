@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEventLoop, QThreadPool, QTimer
@@ -14,17 +15,16 @@ from PySide6.QtWidgets import QApplication
 from plotpilot.models.multi_layer_job import MultiLayerJobState
 from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
-from pathlib import Path
-from plotpilot.services.layer_service import layers_for_document
-from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.fake import FakePlotterBackend
+from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import (
     AUTO_DETECT_INTERVAL_MS,
     AUTO_DETECT_RESUME_DELAY_MS,
     PlotterService,
 )
+from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -276,7 +276,10 @@ def test_automatic_disconnect(qapp, fast_monitor) -> None:
         state=PlotterConnectionState.DISCONNECTED,
         message="Not connected",
     )
-    _wait_until(lambda: service.status.state is PlotterConnectionState.DISCONNECTED, timeout_ms=4000)
+    _wait_until(
+        lambda: service.status.state is PlotterConnectionState.DISCONNECTED,
+        timeout_ms=4000,
+    )
     assert updates[-1].state is PlotterConnectionState.DISCONNECTED
 
 
@@ -299,7 +302,10 @@ def test_automatic_reconnect_runs_full_detect(qapp, fast_monitor) -> None:
         state=PlotterConnectionState.DISCONNECTED,
         message="Not connected",
     )
-    _wait_until(lambda: service.status.state is PlotterConnectionState.DISCONNECTED, timeout_ms=4000)
+    _wait_until(
+        lambda: service.status.state is PlotterConnectionState.DISCONNECTED,
+        timeout_ms=4000,
+    )
     fake.detect_presence_result = PlotterStatus(
         state=PlotterConnectionState.CONNECTED,
         message="Connected",
