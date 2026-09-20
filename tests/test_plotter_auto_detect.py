@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState
 from plotpilot.models.plot_job import PlotPhase, PlotResult
@@ -33,14 +32,6 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 def _sample_document():
     return load_svg_from_path(FIXTURES / "preview_two_layers.svg")
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    application = QApplication.instance()
-    if application is None:
-        application = QApplication([])
-    yield application
 
 
 def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
@@ -136,19 +127,8 @@ def _start_monitor(service: PlotterService) -> None:
     service.start_automatic_monitoring()
 
 
-@pytest.fixture
-def fast_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "plotpilot.services.plotter_service.AUTO_DETECT_INTERVAL_MS",
-        80,
-    )
-    monkeypatch.setattr(
-        "plotpilot.services.plotter_service.AUTO_DETECT_RESUME_DELAY_MS",
-        40,
-    )
-
-
-def test_startup_triggers_full_detect_without_blocking(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_startup_triggers_full_detect_without_blocking(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(
             state=PlotterConnectionState.CONNECTED,
@@ -163,7 +143,8 @@ def test_startup_triggers_full_detect_without_blocking(qapp, fast_monitor) -> No
     assert fake.detect_calls == 1
 
 
-def test_periodic_presence_poll(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_periodic_presence_poll(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(
             state=PlotterConnectionState.CONNECTED,
@@ -183,7 +164,8 @@ def test_periodic_presence_poll(qapp, fast_monitor) -> None:
     assert fake.detect_presence_calls >= before + 1
 
 
-def test_detect_calls_never_overlap(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_detect_calls_never_overlap(qapp) -> None:
     lock = threading.Lock()
     in_detect = {"count": 0, "max": 0}
 
@@ -193,7 +175,7 @@ def test_detect_calls_never_overlap(qapp, fast_monitor) -> None:
                 in_detect["count"] += 1
                 in_detect["max"] = max(in_detect["max"], in_detect["count"])
             try:
-                time.sleep(0.15)
+                time.sleep(0.03)
                 return super().detect_presence()
             finally:
                 with lock:
@@ -219,7 +201,8 @@ def test_detect_calls_never_overlap(qapp, fast_monitor) -> None:
     assert in_detect["max"] == 1
 
 
-def test_polling_suspended_during_plot(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_polling_suspended_during_plot(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
         detect_presence_result=PlotterStatus(
@@ -245,7 +228,8 @@ def test_polling_suspended_during_plot(qapp, fast_monitor) -> None:
     )
 
 
-def test_polling_suspended_during_safe_stop(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_polling_suspended_during_safe_stop(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
         detect_presence_result=PlotterStatus(
@@ -278,13 +262,14 @@ def test_polling_suspended_during_safe_stop(qapp, fast_monitor) -> None:
     _wait_until(lambda: fake.detect_presence_calls > presence_before, timeout_ms=8000)
 
 
-def test_polling_suspended_during_pen_commands(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_polling_suspended_during_pen_commands(qapp) -> None:
     lock = threading.Event()
 
     class PenSlowFake(FakePlotterBackend):
         def pen_up(self) -> PlotterStatus:
             lock.set()
-            time.sleep(0.2)
+            time.sleep(0.03)
             return super().pen_up()
 
     fake = PenSlowFake(
@@ -315,7 +300,8 @@ def test_polling_suspended_during_pen_commands(qapp, fast_monitor) -> None:
     _wait_until(lambda: fake.detect_presence_calls > presence_before, timeout_ms=8000)
 
 
-def test_automatic_disconnect(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_automatic_disconnect(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="Firmware"),
         detect_presence_result=PlotterStatus(
@@ -339,7 +325,8 @@ def test_automatic_disconnect(qapp, fast_monitor) -> None:
     assert updates[-1].state is PlotterConnectionState.DISCONNECTED
 
 
-def test_automatic_reconnect_runs_full_detect(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_automatic_reconnect_runs_full_detect(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(
             state=PlotterConnectionState.CONNECTED,
@@ -371,7 +358,8 @@ def test_automatic_reconnect_runs_full_detect(qapp, fast_monitor) -> None:
     _wait_until(lambda: service.status.message == "Firmware 2.7.0", timeout_ms=4000)
 
 
-def test_identical_state_does_not_spam_signals(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_identical_state_does_not_spam_signals(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="Firmware"),
         detect_presence_result=PlotterStatus(
@@ -403,7 +391,8 @@ def test_refresh_still_works_when_idle(qapp) -> None:
     assert fake.detect_calls == 1
 
 
-def test_refresh_coalesced_during_plot(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_refresh_coalesced_during_plot(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
         plot_block_until_cancel=True,
@@ -426,7 +415,8 @@ def test_refresh_coalesced_during_plot(qapp, fast_monitor) -> None:
     _wait_until(lambda: fake.detect_calls >= 1, timeout_ms=8000)
 
 
-def test_shutdown_stops_monitor_timer(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_shutdown_stops_monitor_timer(qapp) -> None:
     fake = FakePlotterBackend()
     service = PlotterService(fake)
     _start_monitor(service)
@@ -435,7 +425,8 @@ def test_shutdown_stops_monitor_timer(qapp, fast_monitor) -> None:
     assert not service._monitor_timer.isActive()  # noqa: SLF001
 
 
-def test_multi_layer_pen_change_suspends_presence(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_multi_layer_pen_change_suspends_presence(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
         detect_presence_result=PlotterStatus(
@@ -460,7 +451,8 @@ def test_multi_layer_pen_change_suspends_presence(qapp, fast_monitor) -> None:
     _assert_presence_stable_for(fake, presence_at_wait, duration_ms=200)
 
 
-def test_main_window_starts_monitoring(qapp, fast_monitor) -> None:
+@pytest.mark.slow
+def test_main_window_starts_monitoring(qapp) -> None:
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
     )

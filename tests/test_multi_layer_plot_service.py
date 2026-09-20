@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState
@@ -17,6 +16,7 @@ from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.svg_loader import load_svg_from_path
+from qt_helpers import wait_for_safe_stop, wait_until
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -29,34 +29,8 @@ def qapp():
     yield application
 
 
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
-
-
 def _wait_for_job_state(service: MultiLayerPlotService, state: MultiLayerJobState) -> None:
-    if service.job.state is state:
-        return
-
-    def _check(_job: object) -> None:
-        if service.job.state is state:
-            loop.quit()
-
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    service.job_changed.connect(_check)
-    timer.start(5000)
-    loop.exec()
-    timer.stop()
-    service.job_changed.disconnect(_check)
+    wait_until(lambda: service.job.state is state, timeout_ms=5000)
     assert service.job.state is state
 
 
@@ -91,10 +65,8 @@ def test_first_layer_plots_after_start(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()
     service.start_job(document, [layers[0]], settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
     assert len(fake.plot_paths) == 1
-    assert service.job.state is MultiLayerJobState.COMPLETED
 
 
 def test_two_layers_pauses_for_pen_change(qapp) -> None:
@@ -103,8 +75,6 @@ def test_two_layers_pauses_for_pen_change(qapp) -> None:
     pen_signals: list[object] = []
     service.pen_change_required.connect(pen_signals.append)
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     assert len(fake.plot_paths) == 1
     assert fake.pen_up_calls >= 1
@@ -116,12 +86,8 @@ def test_continue_starts_next_layer_only(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     service.continue_after_pen_change()
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
     assert len(fake.plot_paths) == 2
     assert "only-in-layer-b" in fake.plot_file_contents[1]
@@ -131,13 +97,9 @@ def test_double_continue_does_not_duplicate(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     service.continue_after_pen_change()
     service.continue_after_pen_change()
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
     assert len(fake.plot_paths) == 2
 
@@ -146,11 +108,9 @@ def test_stop_while_waiting(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     service.stop_job()
-    _wait_for_signal(plotter.safe_stop_finished)
+    wait_for_safe_stop(plotter)
     assert service.job.state is MultiLayerJobState.CANCELLED
     assert service.job.completed_count == 1
     assert len(fake.plot_paths) == 1
@@ -168,8 +128,6 @@ def test_failure_stops_job(qapp) -> None:
     service = MultiLayerPlotService(plotter)
     document, layers = _two_layers()
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.ERROR)
     assert len(fake.plot_paths) == 1
 
@@ -179,8 +137,7 @@ def test_settings_snapshot_used(qapp) -> None:
     document, layers = _two_layers()
     snapshot = PlotSettings(pen_down_speed=42)
     service.start_job(document, [layers[0]], settings=snapshot)
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
+    wait_until(lambda: len(fake.plot_paths) >= 1)
     assert fake.plot_settings_used[-1] == snapshot
 
 
@@ -188,14 +145,11 @@ def test_temp_files_cleaned(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     first = fake.plot_paths[0]
     assert not first.exists()
     service.continue_after_pen_change()
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
     second = fake.plot_paths[1]
     assert not second.exists()
 
@@ -206,7 +160,5 @@ def test_pen_change_metadata(qapp) -> None:
     captured: list[object] = []
     service.pen_change_required.connect(captured.append)
     service.start_job(document, layers, settings=PlotSettings())
-    _wait_for_signal(plotter.plot_state_changed)
-    _wait_for_signal(plotter.plot_state_changed)
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     assert captured[0].name == layers[1].name

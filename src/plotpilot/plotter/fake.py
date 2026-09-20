@@ -108,6 +108,7 @@ class FakePlotterBackend:
         if svg_path.exists():
             self.plot_file_contents.append(svg_path.read_text(encoding="utf-8"))
         if self._cancel_event.is_set():
+            self.manual_sequence.append("plot_exited")
             return PlotResult(
                 success=False,
                 cancelled=True,
