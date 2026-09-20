@@ -20,6 +20,7 @@ plotpilot = "plotpilot.app.main:run"
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.10 ; sys_platform == 'darwin'",
     "pytest>=8.3",
     "ruff>=0.9",
 ]
