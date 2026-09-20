@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -37,6 +38,19 @@ from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
 
 
+def choose_svg_file(parent: QWidget) -> str | None:
+    """Show the production SVG file picker. Returns an absolute path or None if cancelled."""
+    file_path, _selected_filter = QFileDialog.getOpenFileName(
+        parent,
+        "Open SVG…",
+        "",
+        "SVG files (*.svg)",
+    )
+    if not file_path:
+        return None
+    return file_path
+
+
 class MainWindow(QMainWindow):
     """PlotPilot main window."""
 
@@ -45,6 +59,9 @@ class MainWindow(QMainWindow):
         *,
         plotter_backend: PlotterBackend | None = None,
         settings_service: SettingsService | None = None,
+        svg_file_chooser: Callable[[], str | None] | None = None,
+        auto_detect_interval_ms: int | None = None,
+        auto_detect_resume_delay_ms: int | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("PlotPilot")
@@ -58,9 +75,12 @@ class MainWindow(QMainWindow):
         self._settings_service = (
             settings_service if settings_service is not None else SettingsService(parent=self)
         )
+        self._svg_file_chooser = svg_file_chooser
         self._plotter_service = PlotterService(
             backend,
             settings_service=self._settings_service,
+            auto_detect_interval_ms=auto_detect_interval_ms,
+            auto_detect_resume_delay_ms=auto_detect_resume_delay_ms,
             parent=self,
         )
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
@@ -478,17 +498,15 @@ class MainWindow(QMainWindow):
     def _open_svg(self) -> None:
         if self._multi_layer_service.job.is_active:
             return
-        file_path, _selected_filter = QFileDialog.getOpenFileName(
-            self,
-            "Open SVG…",
-            "",
-            "SVG files (*.svg)",
-        )
-        if not file_path:
+        if self._svg_file_chooser is not None:
+            chosen = self._svg_file_chooser()
+        else:
+            chosen = choose_svg_file(self)
+        if not chosen:
             return
 
         try:
-            document = load_svg_from_path(Path(file_path))
+            document = load_svg_from_path(Path(chosen))
         except SvgLoadError as exc:
             QMessageBox.warning(
                 self,

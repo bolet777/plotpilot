@@ -104,10 +104,22 @@ class PlotterService(QObject):
         backend: PlotterBackend | None = None,
         *,
         settings_service: SettingsService | None = None,
+        auto_detect_interval_ms: int | None = None,
+        auto_detect_resume_delay_ms: int | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._backend = backend if backend is not None else AxiDrawCliBackend()
+        self._auto_detect_interval_ms = (
+            auto_detect_interval_ms
+            if auto_detect_interval_ms is not None
+            else AUTO_DETECT_INTERVAL_MS
+        )
+        self._auto_detect_resume_delay_ms = (
+            auto_detect_resume_delay_ms
+            if auto_detect_resume_delay_ms is not None
+            else AUTO_DETECT_RESUME_DELAY_MS
+        )
         self._settings_service = settings_service
         self._status = PlotterStatus(
             state=PlotterConnectionState.DISCONNECTED,
@@ -127,11 +139,11 @@ class PlotterService(QObject):
         self._extra_hardware_busy: Callable[[], bool] | None = None
         self._auto_detect_paused = False
         self._monitor_timer = QTimer(self)
-        self._monitor_timer.setInterval(AUTO_DETECT_INTERVAL_MS)
+        self._monitor_timer.setInterval(self._auto_detect_interval_ms)
         self._monitor_timer.timeout.connect(self._on_monitor_timer)
         self._resume_timer = QTimer(self)
         self._resume_timer.setSingleShot(True)
-        self._resume_timer.setInterval(AUTO_DETECT_RESUME_DELAY_MS)
+        self._resume_timer.setInterval(self._auto_detect_resume_delay_ms)
         self._resume_timer.timeout.connect(self._on_auto_detect_resume)
         self._shutdown = False
         _register_plotter_service(self)
@@ -176,8 +188,8 @@ class PlotterService(QObject):
 
     def start_automatic_monitoring(self) -> None:
         """Begin passive polling after UI startup (non-blocking)."""
-        self._monitor_timer.setInterval(AUTO_DETECT_INTERVAL_MS)
-        self._resume_timer.setInterval(AUTO_DETECT_RESUME_DELAY_MS)
+        self._monitor_timer.setInterval(self._auto_detect_interval_ms)
+        self._resume_timer.setInterval(self._auto_detect_resume_delay_ms)
         self._auto_detect_paused = False
         if not self._monitor_timer.isActive():
             self._monitor_timer.start()

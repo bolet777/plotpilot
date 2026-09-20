@@ -4,54 +4,55 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    application = QApplication.instance()
-    if application is None:
-        application = QApplication([])
-    yield application
+def test_empty_state_when_no_document(main_window: MainWindow) -> None:
+    assert main_window.document is None
+    assert main_window._preview_stack.currentWidget() is main_window._preview_empty_page
+    assert main_window._open_svg_empty_button.isHidden() is False
+    assert main_window._open_svg_persistent_button.isHidden()
 
 
-def test_empty_state_when_no_document(qapp) -> None:
-    window = MainWindow()
-    assert window.document is None
-    assert window._preview_stack.currentWidget() is window._preview_empty_page
-    assert window._open_svg_empty_button.isHidden() is False
-    assert window._open_svg_persistent_button.isHidden()
+def test_persistent_open_button_after_document_loaded(main_window: MainWindow) -> None:
+    main_window.set_document(load_svg_from_path(FIXTURES / "simple.svg"))
+    assert main_window._preview_stack.currentWidget() is main_window._preview
+    assert main_window._open_svg_persistent_button.isHidden() is False
+    assert main_window._open_svg_persistent_button.isEnabled()
 
 
-def test_persistent_open_button_after_document_loaded(qapp) -> None:
-    window = MainWindow()
-    window.set_document(load_svg_from_path(FIXTURES / "valid_basic.svg"))
-    assert window._preview_stack.currentWidget() is window._preview
-    assert window._open_svg_persistent_button.isHidden() is False
-    assert window._open_svg_persistent_button.isEnabled()
-
-
-def test_open_buttons_trigger_open_svg_action(qapp) -> None:
-    window = MainWindow()
+def test_open_buttons_trigger_open_svg_action(main_window: MainWindow) -> None:
     triggered: list[int] = []
-    window._open_svg_action.triggered.connect(lambda: triggered.append(1))
+    main_window._open_svg_action.triggered.connect(lambda: triggered.append(1))
 
-    window._open_svg_empty_button.click()
+    main_window._open_svg_empty_button.click()
     assert triggered == [1]
 
-    window.set_document(load_svg_from_path(FIXTURES / "valid_basic.svg"))
+    main_window.set_document(load_svg_from_path(FIXTURES / "simple.svg"))
     triggered.clear()
-    window._open_svg_persistent_button.click()
+    main_window._open_svg_persistent_button.click()
     assert triggered == [1]
 
 
-def test_menu_open_action_same_as_shortcut_target(qapp) -> None:
-    window = MainWindow()
-    assert window._open_svg_action.text() == "Open SVG…"
-    assert window._open_svg_action.shortcut().toString() != ""
+def test_menu_open_action_same_as_shortcut_target(main_window: MainWindow) -> None:
+    assert main_window._open_svg_action.text() == "Open SVG…"
+    assert main_window._open_svg_action.shortcut().toString() != ""
+
+
+def test_open_svg_action_loads_injected_path(main_window: MainWindow) -> None:
+    fixture_path = str(FIXTURES / "five_inkscape_layers.svg")
+    main_window._svg_file_chooser = lambda: fixture_path
+    main_window._open_svg_action.trigger()
+    assert main_window.document is not None
+    assert len(main_window.layers) >= 1
+
+
+def test_open_svg_cancelled_leaves_document_unchanged(main_window: MainWindow) -> None:
+    main_window.set_document(load_svg_from_path(FIXTURES / "simple.svg"))
+    before = main_window.document
+    main_window._svg_file_chooser = lambda: None
+    main_window._open_svg_action.trigger()
+    assert main_window.document is before
