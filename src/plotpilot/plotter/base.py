@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from plotpilot.models.plot_estimate import PlotEstimate
 from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterStatus
@@ -42,3 +43,11 @@ class PlotterBackend(Protocol):
 
     def cancel_plot(self) -> None:
         """Request cancellation of an in-flight plot_svg call."""
+
+    def estimate_plot_svg(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PlotEstimate | None:
+        """Offline preview estimate (-v -T). None if unavailable or parse failed."""

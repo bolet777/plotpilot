@@ -131,10 +131,14 @@ class MultiLayerPlotService(QObject):
             self._fail_job("Layer is no longer available.")
             return "Layer is no longer available."
 
+        next_layer = self._job.next_layer
         error = self._plotter.start_plot_layer(
             document,
             svg_layer,
             plot_settings=self._job.settings,
+            layer_index=self._job.current_index + 1,
+            layer_count=self._job.total_layers,
+            next_layer_name=next_layer.name if next_layer is not None else None,
         )
         if error is not None:
             self._fail_job(error)

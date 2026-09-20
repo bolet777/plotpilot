@@ -10,8 +10,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from plotpilot.models.plot_estimate import PlotEstimate, parse_preview_report
 from plotpilot.models.plot_job import PlotResult
-from plotpilot.models.plot_settings import PlotSettings, build_axicli_plot_argv
+from plotpilot.models.plot_settings import (
+    PlotSettings,
+    build_axicli_plot_argv,
+    build_axicli_preview_argv,
+)
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 
 CliRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
@@ -247,6 +252,28 @@ class AxiDrawCliBackend:
             return PlotResult(success=False, message=summary, detail=blob)
 
         return PlotResult(success=True, message="Plot complete", detail=blob)
+
+    def estimate_plot_svg(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PlotEstimate | None:
+        cli = self._resolve_cli()
+        if cli is None:
+            return None
+        try:
+            argv = build_axicli_preview_argv(cli, svg_path, settings)
+        except ValueError:
+            return None
+        try:
+            proc = self._runner(argv, self.timeout_seconds)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        blob = _combined_output(proc)
+        if proc.returncode != 0:
+            return None
+        return parse_preview_report(blob)
 
     def cancel_plot(self) -> None:
         proc = self._plot_process

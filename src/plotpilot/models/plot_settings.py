@@ -86,6 +86,20 @@ class PlotSettings:
         return self.path_reordering == REORDERING_BASIC
 
 
+def append_axicli_motion_argv(argv: list[str], settings: PlotSettings) -> None:
+    """Append speed/accel/model/reorder flags shared by plot and preview."""
+    if settings.pen_down_speed is not None:
+        argv.extend(["-s", str(settings.pen_down_speed)])
+    if settings.pen_up_speed is not None:
+        argv.extend(["-S", str(settings.pen_up_speed)])
+    if settings.acceleration is not None:
+        argv.extend(["-a", str(settings.acceleration)])
+    if settings.model is not None:
+        argv.extend(["-L", str(settings.model)])
+    if settings.path_reordering is not None:
+        argv.extend(["-G", str(settings.path_reordering)])
+
+
 def build_axicli_plot_argv(
     cli: str,
     svg_path: Path,
@@ -95,14 +109,18 @@ def build_axicli_plot_argv(
     plot_settings = settings if settings is not None else PlotSettings()
     plot_settings.validate()
     argv = [cli, str(svg_path), "-m", "plot", "-c", "1"]
-    if plot_settings.pen_down_speed is not None:
-        argv.extend(["-s", str(plot_settings.pen_down_speed)])
-    if plot_settings.pen_up_speed is not None:
-        argv.extend(["-S", str(plot_settings.pen_up_speed)])
-    if plot_settings.acceleration is not None:
-        argv.extend(["-a", str(plot_settings.acceleration)])
-    if plot_settings.model is not None:
-        argv.extend(["-L", str(plot_settings.model)])
-    if plot_settings.path_reordering is not None:
-        argv.extend(["-G", str(plot_settings.path_reordering)])
+    append_axicli_motion_argv(argv, plot_settings)
+    return argv
+
+
+def build_axicli_preview_argv(
+    cli: str,
+    svg_path: Path,
+    settings: PlotSettings | None = None,
+) -> list[str]:
+    """Build axicli argv for offline preview time/distance estimate."""
+    plot_settings = settings if settings is not None else PlotSettings()
+    plot_settings.validate()
+    argv = [cli, str(svg_path), "-v", "-T"]
+    append_axicli_motion_argv(argv, plot_settings)
     return argv
