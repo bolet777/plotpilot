@@ -35,6 +35,9 @@ class _PlotterTaskSignals(QObject):
     finished = Signal(object, str)
     progress = Signal(str)
 
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+
 
 class _PlotterTask(QRunnable):
     def __init__(
@@ -130,10 +133,14 @@ class PlotterService(QObject):
         self._resume_timer.setSingleShot(True)
         self._resume_timer.setInterval(AUTO_DETECT_RESUME_DELAY_MS)
         self._resume_timer.timeout.connect(self._on_auto_detect_resume)
+        self._shutdown = False
         _register_plotter_service(self)
 
     def shutdown(self) -> None:
         """Stop background work (timers, in-flight plot). Safe when the UI is closing."""
+        if self._shutdown:
+            return
+        self._shutdown = True
         self.stop_automatic_monitoring()
         if self._plot_in_flight:
             try:
@@ -205,6 +212,8 @@ class PlotterService(QObject):
         self._begin_full_detect()
 
     def _kick_initial_detection(self) -> None:
+        if self._shutdown:
+            return
         if self._is_hardware_busy():
             self._pending_refresh = True
             return
@@ -262,6 +271,8 @@ class PlotterService(QObject):
 
     @Slot()
     def _on_auto_detect_resume(self) -> None:
+        if self._shutdown:
+            return
         if self._is_hardware_busy():
             self._schedule_auto_detect_resume()
             return
@@ -279,6 +290,8 @@ class PlotterService(QObject):
 
     @Slot()
     def _on_monitor_timer(self) -> None:
+        if self._shutdown:
+            return
         if self._auto_detect_paused or self._is_hardware_busy():
             self._pending_presence_after_resume = True
             return
@@ -357,10 +370,14 @@ class PlotterService(QObject):
         self._safe_stop_in_flight = True
         self._pause_auto_detect_for_hardware()
         self._safe_stop_wait_for_plot = self._plot_in_flight
+        if self._plot_in_flight:
+            # Cancel from the caller thread so a blocked plot worker releases even when
+            # the thread pool is saturated and the safe-stop task has not started yet.
+            self._backend.cancel_plot()
         layer_name = self._plot_state.layer_name
         self._set_plot_state(PlotPhase.STOPPING, layer_name, "Stopping plot…")
 
-        signals = _PlotterTaskSignals()
+        signals = _PlotterTaskSignals(self)
         signals.finished.connect(self._on_task_finished)
         signals.progress.connect(self._on_safe_stop_progress)
 
@@ -381,6 +398,8 @@ class PlotterService(QObject):
 
     @Slot(str)
     def _on_safe_stop_progress(self, message: str) -> None:
+        if self._shutdown or not self._safe_stop_in_flight:
+            return
         layer_name = self._plot_state.layer_name
         self._set_plot_state(PlotPhase.STOPPING, layer_name, message)
 
@@ -449,20 +468,21 @@ class PlotterService(QObject):
             self._operation_in_flight = True
         if operation_name in ("plot", "pen_up", "pen_down", "safe_stop"):
             self._pause_auto_detect_for_hardware()
-        signals = _PlotterTaskSignals()
+        signals = _PlotterTaskSignals(self)
         signals.finished.connect(self._on_task_finished)
         task = _PlotterTask(operation, operation_name, signals)
         QThreadPool.globalInstance().start(task)
 
     @Slot(object, str)
     def _on_task_finished(self, result: object, operation_name: str) -> None:
+        if self._shutdown:
+            return
         if operation_name == "plot":
             self._plot_in_flight = False
             self._active_plot_settings = None
             self._cleanup_temp_plot_file()
             self._plot_exit_event.set()
             if self._safe_stop_in_flight:
-                self._schedule_auto_detect_resume()
                 return
             plot_result = (
                 result

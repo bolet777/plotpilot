@@ -107,6 +107,12 @@ class FakePlotterBackend:
         self.plot_file_existed = svg_path.exists()
         if svg_path.exists():
             self.plot_file_contents.append(svg_path.read_text(encoding="utf-8"))
+        if self._cancel_event.is_set():
+            return PlotResult(
+                success=False,
+                cancelled=True,
+                message="Plot stopped",
+            )
         self._cancel_event.clear()
         if self.plot_delay_seconds > 0:
             time.sleep(self.plot_delay_seconds)

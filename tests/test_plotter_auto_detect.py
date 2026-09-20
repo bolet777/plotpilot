@@ -9,11 +9,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEventLoop, QThreadPool, QTimer
+from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState
-from plotpilot.models.plot_job import PlotResult
+from plotpilot.models.plot_job import PlotPhase, PlotResult
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.fake import FakePlotterBackend
@@ -45,12 +46,20 @@ def qapp():
 def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
     loop = QEventLoop()
     timer = QTimer()
+    received = {"ok": False}
+
+    def _mark_received(*_args: object) -> None:
+        received["ok"] = True
+
     timer.setSingleShot(True)
     timer.timeout.connect(loop.quit)
+    signal.connect(_mark_received)
     signal.connect(loop.quit)
     timer.start(timeout_ms)
     loop.exec()
     timer.stop()
+    if not received["ok"]:
+        raise AssertionError("Timed out waiting for Qt signal")
 
 
 def _wait_until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
@@ -59,32 +68,67 @@ def _wait_until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
         QCoreApplication.processEvents()
         if predicate():
             return
-        time.sleep(0.02)
+        remaining_ms = int(max(0.0, (deadline - time.monotonic()) * 1000.0))
+        QTest.qWait(min(10, remaining_ms))
     raise AssertionError("Timed out waiting for condition")
+
+
+def _wait_for_detection_idle(service: PlotterService, timeout_ms: int = 8000) -> None:
+    _wait_until(
+        lambda: not service._detect_in_flight and not service._operation_in_flight,  # noqa: SLF001
+        timeout_ms=timeout_ms,
+    )
+
+
+def _wait_for_presence_baseline(
+    service: PlotterService,
+    fake: FakePlotterBackend,
+    *,
+    timeout_ms: int = 8000,
+) -> int:
+    """Wait for initial full detect + first presence poll, then a quiet window."""
+    _wait_until(lambda: fake.detect_calls >= 1, timeout_ms=timeout_ms)
+    _wait_until(lambda: fake.detect_presence_calls >= 1, timeout_ms=timeout_ms)
+    _wait_for_detection_idle(service, timeout_ms=timeout_ms)
+    return fake.detect_presence_calls
+
+
+def _assert_presence_stable_for(
+    fake: FakePlotterBackend,
+    baseline: int,
+    duration_ms: int,
+) -> None:
+    deadline = time.monotonic() + duration_ms / 1000.0
+    while time.monotonic() < deadline:
+        assert fake.detect_presence_calls == baseline
+        QCoreApplication.processEvents()
+        remaining_ms = int(max(0.0, (deadline - time.monotonic()) * 1000.0))
+        QTest.qWait(min(10, remaining_ms))
+
+
+def _assert_presence_stable_while(
+    fake: FakePlotterBackend,
+    baseline: int,
+    predicate: Callable[[], bool],
+    *,
+    timeout_ms: int = 3000,
+) -> None:
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        if not predicate():
+            return
+        assert fake.detect_presence_calls == baseline
+        QCoreApplication.processEvents()
+        remaining_ms = int(max(0.0, (deadline - time.monotonic()) * 1000.0))
+        QTest.qWait(min(10, remaining_ms))
+    raise AssertionError("Timed out while waiting for end condition")
 
 
 _monitored_services: list[PlotterService] = []
 
 
-@pytest.fixture(autouse=True)
-def _stop_monitors_after_test() -> None:
-    yield
-    for service in list(_monitored_services):
-        try:
-            service.stop_automatic_monitoring()
-        except RuntimeError:
-            pass
-    _monitored_services.clear()
-    pool = QThreadPool.globalInstance()
-    pool.waitForDone(5000)
-    QCoreApplication.processEvents()
-
-
 def _wait_plotter_idle(service: PlotterService, timeout_ms: int = 8000) -> None:
-    _wait_until(
-        lambda: not service._detect_in_flight and not service._operation_in_flight,  # noqa: SLF001
-        timeout_ms=timeout_ms,
-    )
+    _wait_for_detection_idle(service, timeout_ms=timeout_ms)
 
 
 def _start_monitor(service: PlotterService) -> None:
@@ -150,22 +194,27 @@ def test_detect_calls_never_overlap(qapp, fast_monitor) -> None:
                 in_detect["max"] = max(in_detect["max"], in_detect["count"])
             try:
                 time.sleep(0.15)
-                return PlotterStatus(
-                    state=PlotterConnectionState.CONNECTED,
-                    message="Connected",
-                )
+                return super().detect_presence()
             finally:
                 with lock:
                     in_detect["count"] -= 1
 
-    fake = SlowFake()
+    fake = SlowFake(
+        detect_result=PlotterStatus(
+            state=PlotterConnectionState.CONNECTED,
+            message="Firmware",
+        ),
+        detect_presence_result=PlotterStatus(
+            state=PlotterConnectionState.CONNECTED,
+            message="Connected",
+        ),
+    )
     service = PlotterService(fake)
     service._status = PlotterStatus(  # noqa: SLF001
         state=PlotterConnectionState.CONNECTED,
         message="Firmware",
     )
     _start_monitor(service)
-    _wait_plotter_idle(service)
     _wait_until(lambda: fake.detect_presence_calls >= 2, timeout_ms=8000)
     assert in_detect["max"] == 1
 
@@ -182,20 +231,17 @@ def test_polling_suspended_during_plot(qapp, fast_monitor) -> None:
     service = PlotterService(fake)
     service._status = fake.detect_result  # noqa: SLF001
     _start_monitor(service)
-    _wait_until(lambda: fake.detect_calls >= 1)
-    presence_before = fake.detect_presence_calls
+    presence_before = _wait_for_presence_baseline(service, fake)
     document = _sample_document()
     layer = layers_for_document(document)[0]
     service.start_plot_layer(document, layer)
     _wait_until(lambda: fake.plot_paths, timeout_ms=2000)
-    time.sleep(0.25)
-    QCoreApplication.processEvents()
-    assert fake.detect_presence_calls == presence_before
+    _assert_presence_stable_for(fake, presence_before, duration_ms=250)
     service.cancel_plot()
     _wait_until(lambda: not service._plot_in_flight)  # noqa: SLF001
     _wait_until(
         lambda: fake.detect_presence_calls > presence_before,
-        timeout_ms=3000,
+        timeout_ms=8000,
     )
 
 
@@ -211,20 +257,24 @@ def test_polling_suspended_during_safe_stop(qapp, fast_monitor) -> None:
     service = PlotterService(fake)
     service._status = fake.detect_result  # noqa: SLF001
     _start_monitor(service)
-    _wait_until(lambda: fake.detect_calls >= 1)
-    _wait_plotter_idle(service)
-    presence_before = fake.detect_presence_calls
+    presence_before = _wait_for_presence_baseline(service, fake)
     document = _sample_document()
     layer = layers_for_document(document)[0]
     service.start_plot_layer(document, layer)
     _wait_until(lambda: fake.plot_paths)
+    safe_stop_done = {"ok": False}
+    service.safe_stop_finished.connect(lambda *_: safe_stop_done.__setitem__("ok", True))
     service.request_safe_stop()
-    time.sleep(0.2)
-    QCoreApplication.processEvents()
-    mid = fake.detect_presence_calls
-    assert mid == presence_before
-    _wait_for_signal(service.safe_stop_finished, timeout_ms=8000)
-    _wait_plotter_idle(service)
+    _assert_presence_stable_while(
+        fake,
+        presence_before,
+        lambda: not safe_stop_done["ok"],
+        timeout_ms=8000,
+    )
+    if not safe_stop_done["ok"]:
+        _wait_for_signal(service.safe_stop_finished, timeout_ms=8000)
+    _wait_until(lambda: not service.plot_state.is_active, timeout_ms=8000)
+    _wait_until(lambda: not service._auto_detect_paused)  # noqa: SLF001
     _wait_until(lambda: fake.detect_presence_calls > presence_before, timeout_ms=8000)
 
 
@@ -250,13 +300,19 @@ def test_polling_suspended_during_pen_commands(qapp, fast_monitor) -> None:
     _wait_until(lambda: fake.detect_calls >= 1)
     _wait_plotter_idle(service)
     presence_before = fake.detect_presence_calls
+    pen_done = {"ok": False}
+    service.status_changed.connect(lambda *_: pen_done.__setitem__("ok", True))
     service.pen_up()
     _wait_until(lambda: lock.is_set(), timeout_ms=8000)
-    time.sleep(0.15)
-    QCoreApplication.processEvents()
-    assert fake.detect_presence_calls == presence_before
-    _wait_for_signal(service.status_changed)
-    _wait_until(lambda: fake.detect_presence_calls > presence_before, timeout_ms=4000)
+    _assert_presence_stable_while(
+        fake,
+        presence_before,
+        lambda: service._operation_in_flight and not pen_done["ok"],  # noqa: SLF001
+        timeout_ms=3000,
+    )
+    if not pen_done["ok"]:
+        _wait_for_signal(service.status_changed)
+    _wait_until(lambda: fake.detect_presence_calls > presence_before, timeout_ms=8000)
 
 
 def test_automatic_disconnect(qapp, fast_monitor) -> None:
@@ -361,7 +417,11 @@ def test_refresh_coalesced_during_plot(qapp, fast_monitor) -> None:
     service.refresh()
     assert service._pending_refresh  # noqa: SLF001
     service.cancel_plot()
-    _wait_for_signal(service.plot_state_changed, timeout_ms=8000)
+    _wait_until(lambda: not service._plot_in_flight, timeout_ms=8000)  # noqa: SLF001
+    _wait_until(
+        lambda: service.plot_state.phase in (PlotPhase.CANCELLED, PlotPhase.IDLE),
+        timeout_ms=8000,
+    )
     _wait_plotter_idle(service)
     _wait_until(lambda: fake.detect_calls >= 1, timeout_ms=8000)
 
@@ -392,14 +452,12 @@ def test_multi_layer_pen_change_suspends_presence(qapp, fast_monitor) -> None:
     document = _sample_document()
     layers = layers_for_document(document)
     assert multi.start_job(document, layers, settings=plotter._snapshot_plot_settings()) is None  # noqa: SLF001
-    _wait_for_signal(plotter.plot_state_changed, timeout_ms=8000)
-    _wait_for_signal(plotter.plot_state_changed, timeout_ms=8000)
-    _wait_for_signal(multi.job_changed, timeout_ms=8000)
-    assert multi.job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE
+    _wait_until(
+        lambda: multi.job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE,
+        timeout_ms=8000,
+    )
     presence_at_wait = fake.detect_presence_calls
-    time.sleep(0.2)
-    QCoreApplication.processEvents()
-    assert fake.detect_presence_calls == presence_at_wait
+    _assert_presence_stable_for(fake, presence_at_wait, duration_ms=200)
 
 
 def test_main_window_starts_monitoring(qapp, fast_monitor) -> None:
