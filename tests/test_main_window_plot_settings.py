@@ -10,7 +10,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plotpilot.models.plot_job import PlotPhase, PlotResult
-from plotpilot.models.plot_settings import PlotSettings
+from plotpilot.models.plot_settings import REORDERING_BASIC, PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.settings_service import SettingsService
@@ -109,6 +109,18 @@ def test_settings_reenabled_after_failure(qapp, monkeypatch) -> None:
 def test_changing_slider_does_not_start_plot(qapp) -> None:
     window, fake, _settings = _window(qapp)
     window._plot_settings._pen_down_slider.setValue(50)  # noqa: SLF001
+    assert fake.plot_paths == []
+
+
+def test_optimize_checkbox_reflects_settings(qapp) -> None:
+    window, _fake, settings = _window(qapp)
+    settings.replace(PlotSettings(path_reordering=REORDERING_BASIC))
+    assert window._plot_settings._optimize_checkbox.isChecked()  # noqa: SLF001
+
+
+def test_toggling_optimize_does_not_start_plot(qapp) -> None:
+    window, fake, _settings = _window(qapp)
+    window._plot_settings._optimize_checkbox.setChecked(True)  # noqa: SLF001
     assert fake.plot_paths == []
 
 

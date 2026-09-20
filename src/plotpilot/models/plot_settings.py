@@ -17,6 +17,10 @@ ACCEL_MAX = 100
 MODEL_MIN = 1
 MODEL_MAX = 7
 
+# axicli 3.9.6 --reordering values (see specs/012-plot-optimization/research.md).
+REORDERING_BASIC = 1
+REORDERING_ALLOWED = frozenset({REORDERING_BASIC})
+
 AXIDRAW_MODELS: dict[int, str] = {
     1: "AxiDraw V2, V3, or SE/A4",
     2: "AxiDraw V3/A3 or SE/A3",
@@ -40,6 +44,7 @@ class PlotSettings:
     pen_up_speed: int | None = None
     acceleration: int | None = None
     model: int | None = None
+    path_reordering: int | None = None
 
     def validate(self) -> None:
         if self.pen_down_speed is not None and not SPEED_MIN <= self.pen_down_speed <= SPEED_MAX:
@@ -58,6 +63,10 @@ class PlotSettings:
             raise PlotSettingsValidationError(
                 f"Model must be {MODEL_MIN}–{MODEL_MAX}.",
             )
+        if self.path_reordering is not None and self.path_reordering not in REORDERING_ALLOWED:
+            raise PlotSettingsValidationError(
+                "Path reordering must be omitted or set to basic reorder (1).",
+            )
 
     @property
     def has_overrides(self) -> bool:
@@ -68,8 +77,13 @@ class PlotSettings:
                 self.pen_up_speed,
                 self.acceleration,
                 self.model,
+                self.path_reordering,
             )
         )
+
+    @property
+    def optimize_path_order(self) -> bool:
+        return self.path_reordering == REORDERING_BASIC
 
 
 def build_axicli_plot_argv(
@@ -89,4 +103,6 @@ def build_axicli_plot_argv(
         argv.extend(["-a", str(plot_settings.acceleration)])
     if plot_settings.model is not None:
         argv.extend(["-L", str(plot_settings.model)])
+    if plot_settings.path_reordering is not None:
+        argv.extend(["-G", str(plot_settings.path_reordering)])
     return argv

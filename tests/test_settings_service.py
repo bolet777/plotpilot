@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from plotpilot.models.plot_settings import PlotSettings
+from plotpilot.models.plot_settings import REORDERING_BASIC, PlotSettings
 from plotpilot.services.settings_service import SettingsService
 
 
@@ -65,3 +65,23 @@ def test_reset_clears_overrides_and_storage(isolated_settings: SettingsService) 
     )
     assert not store.contains("plot/pen_down_speed")
     assert not store.contains("plot/model")
+
+
+def test_path_reordering_persists(isolated_settings: SettingsService) -> None:
+    isolated_settings.replace(PlotSettings(path_reordering=REORDERING_BASIC))
+    reloaded = SettingsService(
+        organization=isolated_settings._organization,  # noqa: SLF001
+        application=isolated_settings._application,  # noqa: SLF001
+    )
+    assert reloaded.plot_settings.path_reordering == REORDERING_BASIC
+
+
+def test_reset_clears_path_reordering(isolated_settings: SettingsService) -> None:
+    isolated_settings.replace(PlotSettings(path_reordering=REORDERING_BASIC))
+    isolated_settings.reset_plot_settings()
+    store = QSettings(
+        isolated_settings._organization,  # noqa: SLF001
+        isolated_settings._application,  # noqa: SLF001
+    )
+    assert isolated_settings.plot_settings.path_reordering is None
+    assert not store.contains("plot/path_reordering")

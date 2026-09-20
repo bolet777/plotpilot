@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -20,6 +21,7 @@ from plotpilot.models.plot_settings import (
     REFERENCE_ACCELERATION,
     REFERENCE_PEN_DOWN_SPEED,
     REFERENCE_PEN_UP_SPEED,
+    REORDERING_BASIC,
     SPEED_MAX,
     SPEED_MIN,
     PlotSettings,
@@ -78,6 +80,12 @@ class PlotSettingsWidget(QGroupBox):
         grid.addWidget(self._model_combo, row, 1, 1, 2)
         row += 1
 
+        self._optimize_checkbox = QCheckBox("Optimize path order", self)
+        self._optimize_checkbox.setToolTip("Reorder SVG paths to reduce pen-up travel.")
+        self._optimize_checkbox.toggled.connect(self._on_optimize_toggled)
+        grid.addWidget(self._optimize_checkbox, row, 0, 1, 3)
+        row += 1
+
         self._reset_button = QPushButton("Reset to defaults", self)
         self._reset_button.clicked.connect(self._on_reset)
         grid.addWidget(self._reset_button, row, 0, 1, 3)
@@ -118,6 +126,9 @@ class PlotSettingsWidget(QGroupBox):
             self._set_slider(self._pen_up_slider, self._pen_up_value, settings.pen_up_speed)
             self._set_slider(self._accel_slider, self._accel_value, settings.acceleration)
             self._set_model(settings.model)
+            self._optimize_checkbox.blockSignals(True)
+            self._optimize_checkbox.setChecked(settings.optimize_path_order)
+            self._optimize_checkbox.blockSignals(False)
         finally:
             self._block_sync = False
 
@@ -181,6 +192,22 @@ class PlotSettingsWidget(QGroupBox):
                 pen_up_speed=current.pen_up_speed,
                 acceleration=current.acceleration,
                 model=model,
+                path_reordering=current.path_reordering,
+            )
+        )
+        self.user_changed.emit()
+
+    def _on_optimize_toggled(self, checked: bool) -> None:
+        if self._block_sync:
+            return
+        current = self._service.plot_settings
+        self._service.replace(
+            PlotSettings(
+                pen_down_speed=current.pen_down_speed,
+                pen_up_speed=current.pen_up_speed,
+                acceleration=current.acceleration,
+                model=current.model,
+                path_reordering=REORDERING_BASIC if checked else None,
             )
         )
         self.user_changed.emit()
@@ -192,6 +219,7 @@ class PlotSettingsWidget(QGroupBox):
             pen_up_speed=field.get("pen_up_speed", current.pen_up_speed),
             acceleration=field.get("acceleration", current.acceleration),
             model=current.model,
+            path_reordering=current.path_reordering,
         )
         self._service.replace(updated)
         self.user_changed.emit()
@@ -205,4 +233,5 @@ class PlotSettingsWidget(QGroupBox):
         self._pen_up_slider.setEnabled(not active)
         self._accel_slider.setEnabled(not active)
         self._model_combo.setEnabled(not active)
+        self._optimize_checkbox.setEnabled(not active)
         self._reset_button.setEnabled(not active)
