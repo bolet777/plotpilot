@@ -3,9 +3,44 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QResizeEvent
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QSizePolicy, QWidget
+
+
+def fit_rect_preserve_aspect(
+    source_width: float,
+    source_height: float,
+    available: QRectF,
+) -> QRectF:
+    """Return a centered rect inside *available* with the same aspect ratio as the source."""
+    avail_w = available.width()
+    avail_h = available.height()
+    if source_width <= 0 or source_height <= 0 or avail_w <= 0 or avail_h <= 0:
+        return QRectF(available.x(), available.y(), 0.0, 0.0)
+
+    scale = min(
+        available.width() / source_width,
+        available.height() / source_height,
+    )
+    target_width = source_width * scale
+    target_height = source_height * scale
+    target_x = available.x() + (available.width() - target_width) / 2
+    target_y = available.y() + (available.height() - target_height) / 2
+    return QRectF(target_x, target_y, target_width, target_height)
+
+
+def svg_render_source_size(renderer: QSvgRenderer) -> tuple[float, float]:
+    """Width and height used for aspect-preserving layout (viewBox, else default size)."""
+    view_box = renderer.viewBoxF()
+    if view_box.width() > 0 and view_box.height() > 0:
+        return view_box.width(), view_box.height()
+
+    default = renderer.defaultSize()
+    if default.width() > 0 and default.height() > 0:
+        return float(default.width()), float(default.height())
+
+    return 0.0, 0.0
 
 
 class LayerPreviewWidget(QWidget):
@@ -48,6 +83,10 @@ class LayerPreviewWidget(QWidget):
         self.update()
         return True
 
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.update()
+
     def paintEvent(self, _event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#e8e8e8"))
@@ -72,6 +111,9 @@ class LayerPreviewWidget(QWidget):
             painter.end()
             return
 
-        target = QRectF(self.rect()).adjusted(12.0, 12.0, -12.0, -12.0)
-        self._renderer.render(painter, target)
+        available = QRectF(self.rect()).adjusted(12.0, 12.0, -12.0, -12.0)
+        source_width, source_height = svg_render_source_size(self._renderer)
+        target = fit_rect_preserve_aspect(source_width, source_height, available)
+        if target.width() > 0 and target.height() > 0:
+            self._renderer.render(painter, target)
         painter.end()
