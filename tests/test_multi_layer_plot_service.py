@@ -141,6 +141,18 @@ def test_settings_snapshot_used(qapp) -> None:
     assert fake.plot_settings_used[-1] == snapshot
 
 
+def test_multi_layer_each_invocation_gets_reordering_snapshot(qapp) -> None:
+    service, plotter, fake = _connected_stack(qapp)
+    document, layers = _two_layers()
+    snapshot = PlotSettings(path_reordering=1)
+    service.start_job(document, layers, settings=snapshot)
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert fake.plot_settings_used == [snapshot]
+    service.continue_after_pen_change()
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
+    assert fake.plot_settings_used == [snapshot, snapshot]
+
+
 def test_temp_files_cleaned(qapp) -> None:
     service, plotter, fake = _connected_stack(qapp)
     document, layers = _two_layers()

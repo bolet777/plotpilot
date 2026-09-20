@@ -13,6 +13,7 @@ _KEY_PEN_DOWN = "plot/pen_down_speed"
 _KEY_PEN_UP = "plot/pen_up_speed"
 _KEY_ACCEL = "plot/acceleration"
 _KEY_MODEL = "plot/model"
+_KEY_PATH_REORDERING = "plot/path_reordering"
 
 
 class SettingsService(QObject):
@@ -48,6 +49,7 @@ class SettingsService(QObject):
         self._settings.remove(_KEY_PEN_UP)
         self._settings.remove(_KEY_ACCEL)
         self._settings.remove(_KEY_MODEL)
+        self._settings.remove(_KEY_PATH_REORDERING)
         self._settings.sync()
         self._current = PlotSettings()
         self.settings_changed.emit(self._current)
@@ -57,11 +59,13 @@ class SettingsService(QObject):
         pen_up = _read_optional_int(self._settings, _KEY_PEN_UP)
         accel = _read_optional_int(self._settings, _KEY_ACCEL)
         model = _read_optional_int(self._settings, _KEY_MODEL)
+        path_reordering = _read_optional_int(self._settings, _KEY_PATH_REORDERING)
         settings = PlotSettings(
             pen_down_speed=pen_down,
             pen_up_speed=pen_up,
             acceleration=accel,
             model=model,
+            path_reordering=path_reordering,
         )
         try:
             settings.validate()
@@ -70,6 +74,7 @@ class SettingsService(QObject):
             self._settings.remove(_KEY_PEN_UP)
             self._settings.remove(_KEY_ACCEL)
             self._settings.remove(_KEY_MODEL)
+            self._settings.remove(_KEY_PATH_REORDERING)
             self._settings.sync()
             return PlotSettings()
         return settings
@@ -79,6 +84,7 @@ class SettingsService(QObject):
         _write_optional_int(self._settings, _KEY_PEN_UP, settings.pen_up_speed)
         _write_optional_int(self._settings, _KEY_ACCEL, settings.acceleration)
         _write_optional_int(self._settings, _KEY_MODEL, settings.model)
+        _write_optional_int(self._settings, _KEY_PATH_REORDERING, settings.path_reordering)
         self._settings.sync()
 
 
