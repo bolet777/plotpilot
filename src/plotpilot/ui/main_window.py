@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_job import PlotPhase, PlotState
+from plotpilot.models.plot_progress import PlotProgress
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
@@ -34,6 +36,12 @@ from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.ui.plot_progress_labels import (
+    progress_fraction_label,
+    progress_headline,
+    progress_next_layer_line,
+    progress_timing_line,
+)
 from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
 
@@ -85,6 +93,7 @@ class MainWindow(QMainWindow):
         )
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
         self._plotter_service.plot_state_changed.connect(self._apply_plot_state)
+        self._plotter_service.plot_progress_changed.connect(self._apply_plot_progress)
         self._multi_layer_service = MultiLayerPlotService(self._plotter_service, parent=self)
         self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
         self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
@@ -204,6 +213,25 @@ class MainWindow(QMainWindow):
         self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
         root_layout.addWidget(self._plot_settings)
 
+        self._plot_progress_headline = QLabel("", central)
+        self._plot_progress_headline.setWordWrap(True)
+        self._plot_progress_headline.setVisible(False)
+        root_layout.addWidget(self._plot_progress_headline)
+
+        self._plot_progress_bar = QProgressBar(central)
+        self._plot_progress_bar.setVisible(False)
+        self._plot_progress_bar.setTextVisible(True)
+        self._plot_progress_bar.setRange(0, 100)
+        root_layout.addWidget(self._plot_progress_bar)
+
+        self._plot_progress_timing = QLabel("", central)
+        self._plot_progress_timing.setVisible(False)
+        root_layout.addWidget(self._plot_progress_timing)
+
+        self._plot_progress_next = QLabel("", central)
+        self._plot_progress_next.setVisible(False)
+        root_layout.addWidget(self._plot_progress_next)
+
         self._plot_activity_label = QLabel("", central)
         self._plot_activity_label.setWordWrap(True)
         root_layout.addWidget(self._plot_activity_label)
@@ -230,6 +258,7 @@ class MainWindow(QMainWindow):
         self._sync_preview_empty_state()
         self._apply_plotter_status(self._plotter_service.status)
         self._apply_plot_state(self._plotter_service.plot_state)
+        self._apply_plot_progress(self._plotter_service.plot_progress)
         self._apply_multi_layer_job(self._multi_layer_service.job)
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
@@ -283,16 +312,51 @@ class MainWindow(QMainWindow):
     def _apply_plot_state(self, state: PlotState) -> None:
         job = self._multi_layer_service.job
         if job.is_active and state.phase is not PlotPhase.STOPPING:
+            self._plot_activity_label.setText("")
+            self._update_plot_controls()
             return
-        if state.phase is PlotPhase.RUNNING:
+        if state.phase is PlotPhase.STOPPING:
             self._plot_activity_label.setText(state.message)
-        elif state.phase is PlotPhase.STOPPING:
+        elif state.phase in (PlotPhase.SUCCEEDED, PlotPhase.FAILED, PlotPhase.CANCELLED):
             self._plot_activity_label.setText(state.message)
         elif state.phase is PlotPhase.IDLE:
             self._plot_activity_label.setText(state.message)
         else:
-            self._plot_activity_label.setText(state.message)
+            self._plot_activity_label.setText("")
         self._update_plot_controls()
+
+    def _apply_plot_progress(self, progress: PlotProgress) -> None:
+        job = self._multi_layer_service.job
+        if job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
+            self._set_plot_progress_visible(False)
+            return
+        if not progress.is_visible:
+            self._set_plot_progress_visible(False)
+            return
+        self._set_plot_progress_visible(True)
+        headline = progress_headline(progress)
+        self._plot_progress_headline.setText(headline)
+        fraction_label = progress_fraction_label(progress)
+        if progress.estimated_fraction is not None:
+            value = int(round(progress.estimated_fraction * 100))
+            self._plot_progress_bar.setValue(min(100, max(0, value)))
+            self._plot_progress_bar.setFormat(fraction_label)
+        else:
+            self._plot_progress_bar.setRange(0, 0)
+            self._plot_progress_bar.setFormat(fraction_label or "")
+        self._plot_progress_timing.setText(progress_timing_line(progress))
+        next_line = progress_next_layer_line(progress)
+        self._plot_progress_next.setText(next_line)
+        self._plot_progress_next.setVisible(bool(next_line))
+
+    def _set_plot_progress_visible(self, visible: bool) -> None:
+        self._plot_progress_headline.setVisible(visible)
+        self._plot_progress_bar.setVisible(visible)
+        self._plot_progress_timing.setVisible(visible)
+        if not visible:
+            self._plot_progress_next.setVisible(False)
+            self._plot_progress_bar.setRange(0, 100)
+            self._plot_progress_bar.setValue(0)
 
     def _apply_multi_layer_job(self, job: MultiLayerPlotJob) -> None:
         if job.state is MultiLayerJobState.IDLE:

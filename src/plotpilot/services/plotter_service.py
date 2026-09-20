@@ -6,13 +6,21 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import weakref
 from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
+from plotpilot.models.plot_estimate import PlotEstimate
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
+from plotpilot.models.plot_progress import (
+    PlotProgress,
+    PlotProgressPhase,
+    build_running_progress,
+    idle_plot_progress,
+)
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.models.svg_document import SvgDocument
@@ -29,6 +37,7 @@ PLOT_EXIT_WAIT_SECONDS = PLOT_CANCEL_WAIT + 12.0
 
 AUTO_DETECT_INTERVAL_MS = 5000
 AUTO_DETECT_RESUME_DELAY_MS = 1000
+PLOT_PROGRESS_TICK_MS = 500
 
 
 class _PlotterTaskSignals(QObject):
@@ -97,6 +106,7 @@ class PlotterService(QObject):
 
     status_changed = Signal(object)
     plot_state_changed = Signal(object)
+    plot_progress_changed = Signal(object)
     safe_stop_finished = Signal(object)
 
     def __init__(
@@ -136,6 +146,14 @@ class PlotterService(QObject):
         self._plot_exit_event = threading.Event()
         self._temp_plot_path: Path | None = None
         self._active_plot_settings: PlotSettings | None = None
+        self._plot_progress = idle_plot_progress()
+        self._progress_started_monotonic: float | None = None
+        self._progress_frozen_elapsed: float | None = None
+        self._progress_estimate_seconds: float | None = None
+        self._progress_estimate_unavailable = False
+        self._progress_layer_index: int | None = None
+        self._progress_layer_count: int | None = None
+        self._progress_next_layer_name: str = ""
         self._extra_hardware_busy: Callable[[], bool] | None = None
         self._auto_detect_paused = False
         self._monitor_timer = QTimer(self)
@@ -145,6 +163,9 @@ class PlotterService(QObject):
         self._resume_timer.setSingleShot(True)
         self._resume_timer.setInterval(self._auto_detect_resume_delay_ms)
         self._resume_timer.timeout.connect(self._on_auto_detect_resume)
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(PLOT_PROGRESS_TICK_MS)
+        self._progress_timer.timeout.connect(self._on_progress_timer)
         self._shutdown = False
         _register_plotter_service(self)
 
@@ -154,6 +175,7 @@ class PlotterService(QObject):
             return
         self._shutdown = True
         self.stop_automatic_monitoring()
+        self._stop_progress_timer()
         if self._plot_in_flight:
             try:
                 self._backend.cancel_plot()
@@ -168,6 +190,10 @@ class PlotterService(QObject):
     @property
     def plot_state(self) -> PlotState:
         return self._plot_state
+
+    @property
+    def plot_progress(self) -> PlotProgress:
+        return self._plot_progress
 
     @property
     def backend(self) -> PlotterBackend:
@@ -338,6 +364,9 @@ class PlotterService(QObject):
         layer: SvgLayer,
         *,
         plot_settings: PlotSettings | None = None,
+        layer_index: int | None = None,
+        layer_count: int | None = None,
+        next_layer_name: str | None = None,
     ) -> str | None:
         """Validate and queue a layer plot. Returns an error message or None if started."""
         if self._plot_in_flight or self._safe_stop_in_flight:
@@ -361,6 +390,12 @@ class PlotterService(QObject):
         self._plot_in_flight = True
         self._pause_auto_detect_for_hardware()
         self._plot_exit_event.clear()
+        self._begin_plot_progress(
+            layer.name,
+            layer_index=layer_index,
+            layer_count=layer_count,
+            next_layer_name=next_layer_name or "",
+        )
         self._set_plot_state(
             PlotPhase.RUNNING,
             layer.name,
@@ -368,6 +403,7 @@ class PlotterService(QObject):
         )
 
         plot_settings = self._active_plot_settings
+        self._start_plot_estimate(temp_path, plot_settings)
 
         def _run_plot() -> PlotResult:
             return self._backend.plot_svg(temp_path, settings=plot_settings)
@@ -387,6 +423,7 @@ class PlotterService(QObject):
             # the thread pool is saturated and the safe-stop task has not started yet.
             self._backend.cancel_plot()
         layer_name = self._plot_state.layer_name
+        self._freeze_plot_progress()
         self._set_plot_state(PlotPhase.STOPPING, layer_name, "Stopping plot…")
 
         signals = _PlotterTaskSignals(self)
@@ -476,7 +513,7 @@ class PlotterService(QObject):
         operation: Callable[[], object],
         operation_name: str,
     ) -> None:
-        if operation_name != "plot":
+        if operation_name not in ("plot", "estimate"):
             self._operation_in_flight = True
         if operation_name in ("plot", "pen_up", "pen_down", "safe_stop"):
             self._pause_auto_detect_for_hardware()
@@ -489,6 +526,24 @@ class PlotterService(QObject):
     def _on_task_finished(self, result: object, operation_name: str) -> None:
         if self._shutdown:
             return
+        if operation_name == "estimate":
+            self._operation_in_flight = False
+            if self._progress_started_monotonic is not None and self._plot_state.phase in (
+                PlotPhase.RUNNING,
+                PlotPhase.STOPPING,
+                PlotPhase.SUCCEEDED,
+            ):
+                if isinstance(result, PlotEstimate):
+                    self._progress_estimate_seconds = result.duration_seconds
+                    self._progress_estimate_unavailable = False
+                else:
+                    self._progress_estimate_unavailable = True
+                if self._plot_state.phase is PlotPhase.SUCCEEDED:
+                    self._emit_completed_plot_progress()
+                else:
+                    self._emit_plot_progress(self._progress_phase_for_plot_state())
+            return
+
         if operation_name == "plot":
             self._plot_in_flight = False
             self._active_plot_settings = None
@@ -508,12 +563,15 @@ class PlotterService(QObject):
             if plot_result.cancelled:
                 phase = PlotPhase.CANCELLED
                 message = plot_result.message or "Plot stopped"
+                self._finish_plot_progress(PlotProgressPhase.CANCELLED)
             elif plot_result.success:
                 phase = PlotPhase.SUCCEEDED
                 message = plot_result.message or "Plot complete"
+                self._finish_plot_progress(PlotProgressPhase.COMPLETE, fraction=1.0)
             else:
                 phase = PlotPhase.FAILED
                 message = f"Plot failed: {plot_result.message}"
+                self._finish_plot_progress(PlotProgressPhase.FAILED)
             self._set_plot_state(phase, layer_name, message)
             self._schedule_auto_detect_resume()
             return
@@ -533,6 +591,10 @@ class PlotterService(QObject):
             )
             layer_name = self._plot_state.layer_name
             phase = PlotPhase.IDLE if stop_result.cleanup_complete else PlotPhase.CANCELLED
+            if stop_result.cleanup_complete:
+                self._finish_plot_progress(PlotProgressPhase.CANCELLED)
+            else:
+                self._finish_plot_progress(PlotProgressPhase.CANCELLED)
             self._set_plot_state(phase, layer_name, stop_result.message)
             self.safe_stop_finished.emit(stop_result)
             self._schedule_auto_detect_resume()
@@ -604,6 +666,174 @@ class PlotterService(QObject):
     def _set_plot_state(self, phase: PlotPhase, layer_name: str, message: str) -> None:
         self._plot_state = PlotState(phase=phase, layer_name=layer_name, message=message)
         self.plot_state_changed.emit(self._plot_state)
+        if phase is PlotPhase.STOPPING:
+            self._emit_plot_progress(PlotProgressPhase.STOPPING)
+        elif phase is PlotPhase.RUNNING:
+            self._emit_plot_progress(PlotProgressPhase.RUNNING)
+
+    def _begin_plot_progress(
+        self,
+        layer_name: str,
+        *,
+        layer_index: int | None,
+        layer_count: int | None,
+        next_layer_name: str,
+    ) -> None:
+        self._progress_started_monotonic = time.monotonic()
+        self._progress_frozen_elapsed = None
+        self._progress_estimate_seconds = None
+        self._progress_estimate_unavailable = False
+        self._progress_layer_index = layer_index
+        self._progress_layer_count = layer_count
+        self._progress_next_layer_name = next_layer_name
+        self._progress_timer.start()
+        self._emit_plot_progress(PlotProgressPhase.RUNNING)
+
+    def _start_plot_estimate(self, svg_path: Path, settings: PlotSettings | None) -> None:
+        def _run_estimate() -> PlotEstimate | None:
+            return self._backend.estimate_plot_svg(svg_path, settings=settings)
+
+        self._run_async(_run_estimate, "estimate")
+
+    def _freeze_plot_progress(self) -> None:
+        elapsed = self._current_elapsed_seconds()
+        if elapsed is not None:
+            self._progress_frozen_elapsed = elapsed
+
+    def _finish_plot_progress(
+        self,
+        phase: PlotProgressPhase,
+        *,
+        fraction: float | None = None,
+    ) -> None:
+        self._stop_progress_timer()
+        elapsed = self._current_elapsed_seconds() or 0.0
+        if phase is PlotProgressPhase.COMPLETE:
+            progress = build_running_progress(
+                layer_name=self._plot_state.layer_name,
+                elapsed_seconds=elapsed,
+                estimated_total_seconds=self._progress_estimate_seconds,
+                estimate_unavailable=self._progress_estimate_unavailable,
+                layer_index=self._progress_layer_index,
+                layer_count=self._progress_layer_count,
+                next_layer_name=self._progress_next_layer_name,
+                phase=phase,
+            )
+            progress = PlotProgress(
+                phase=phase,
+                layer_name=progress.layer_name,
+                layer_index=progress.layer_index,
+                layer_count=progress.layer_count,
+                elapsed_seconds=elapsed,
+                estimated_total_seconds=progress.estimated_total_seconds,
+                estimated_remaining_seconds=(
+                    0.0 if fraction == 1.0 else progress.estimated_remaining_seconds
+                ),
+                estimated_fraction=1.0 if fraction == 1.0 else progress.estimated_fraction,
+                is_estimated=progress.is_estimated,
+                estimate_unavailable=progress.estimate_unavailable,
+                next_layer_name=progress.next_layer_name,
+            )
+        else:
+            progress = build_running_progress(
+                layer_name=self._plot_state.layer_name,
+                elapsed_seconds=elapsed,
+                estimated_total_seconds=self._progress_estimate_seconds,
+                estimate_unavailable=self._progress_estimate_unavailable,
+                layer_index=self._progress_layer_index,
+                layer_count=self._progress_layer_count,
+                next_layer_name=self._progress_next_layer_name,
+                phase=phase,
+            )
+        self._plot_progress = progress
+        self.plot_progress_changed.emit(progress)
+        if phase in (
+            PlotProgressPhase.COMPLETE,
+            PlotProgressPhase.FAILED,
+            PlotProgressPhase.CANCELLED,
+        ):
+            self._reset_plot_progress_after_delay()
+
+    def _reset_plot_progress_after_delay(self) -> None:
+        def _clear() -> None:
+            if self._plot_state.phase in (PlotPhase.RUNNING, PlotPhase.STOPPING):
+                return
+            self._plot_progress = idle_plot_progress()
+            self.plot_progress_changed.emit(self._plot_progress)
+
+        QTimer.singleShot(2500, _clear)
+
+    def _stop_progress_timer(self) -> None:
+        try:
+            self._progress_timer.stop()
+        except RuntimeError:
+            pass
+
+    def _current_elapsed_seconds(self) -> float | None:
+        if self._progress_frozen_elapsed is not None:
+            return self._progress_frozen_elapsed
+        if self._progress_started_monotonic is None:
+            return None
+        return time.monotonic() - self._progress_started_monotonic
+
+    def _progress_phase_for_plot_state(self) -> PlotProgressPhase:
+        phase = self._plot_state.phase
+        if phase is PlotPhase.STOPPING:
+            return PlotProgressPhase.STOPPING
+        if phase is PlotPhase.RUNNING:
+            return PlotProgressPhase.RUNNING
+        return PlotProgressPhase.IDLE
+
+    @Slot()
+    def _on_progress_timer(self) -> None:
+        if self._shutdown:
+            return
+        if self._plot_state.phase not in (PlotPhase.RUNNING, PlotPhase.STOPPING):
+            return
+        self._emit_plot_progress(self._progress_phase_for_plot_state())
+
+    def _emit_completed_plot_progress(self) -> None:
+        elapsed = self._current_elapsed_seconds() or 0.0
+        base = build_running_progress(
+            layer_name=self._plot_state.layer_name,
+            elapsed_seconds=elapsed,
+            estimated_total_seconds=self._progress_estimate_seconds,
+            estimate_unavailable=self._progress_estimate_unavailable,
+            layer_index=self._progress_layer_index,
+            layer_count=self._progress_layer_count,
+            next_layer_name=self._progress_next_layer_name,
+            phase=PlotProgressPhase.COMPLETE,
+        )
+        progress = PlotProgress(
+            phase=PlotProgressPhase.COMPLETE,
+            layer_name=base.layer_name,
+            layer_index=base.layer_index,
+            layer_count=base.layer_count,
+            elapsed_seconds=elapsed,
+            estimated_total_seconds=base.estimated_total_seconds,
+            estimated_remaining_seconds=0.0,
+            estimated_fraction=1.0,
+            is_estimated=base.is_estimated,
+            estimate_unavailable=base.estimate_unavailable,
+            next_layer_name=base.next_layer_name,
+        )
+        self._plot_progress = progress
+        self.plot_progress_changed.emit(progress)
+
+    def _emit_plot_progress(self, phase: PlotProgressPhase) -> None:
+        elapsed = self._current_elapsed_seconds() or 0.0
+        progress = build_running_progress(
+            layer_name=self._plot_state.layer_name,
+            elapsed_seconds=elapsed,
+            estimated_total_seconds=self._progress_estimate_seconds,
+            estimate_unavailable=self._progress_estimate_unavailable,
+            layer_index=self._progress_layer_index,
+            layer_count=self._progress_layer_count,
+            next_layer_name=self._progress_next_layer_name,
+            phase=phase,
+        )
+        self._plot_progress = progress
+        self.plot_progress_changed.emit(progress)
 
     def _snapshot_plot_settings(self) -> PlotSettings:
         if self._settings_service is None:

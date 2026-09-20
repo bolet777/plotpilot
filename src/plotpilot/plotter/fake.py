@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from plotpilot.models.plot_estimate import PlotEstimate
 from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
@@ -48,6 +49,9 @@ class FakePlotterBackend:
     plot_file_contents: list[str] = field(default_factory=list)
     plot_file_existed: bool = False
     cancel_plot_calls: int = 0
+    estimate_result: PlotEstimate | None = None
+    estimate_paths: list[Path] = field(default_factory=list)
+    estimate_settings_used: list[PlotSettings | None] = field(default_factory=list)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def detect(self) -> PlotterStatus:
@@ -142,3 +146,13 @@ class FakePlotterBackend:
     def cancel_plot(self) -> None:
         self.cancel_plot_calls += 1
         self._cancel_event.set()
+
+    def estimate_plot_svg(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PlotEstimate | None:
+        self.estimate_paths.append(svg_path)
+        self.estimate_settings_used.append(settings)
+        return self.estimate_result
