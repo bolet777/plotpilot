@@ -15,10 +15,10 @@ Repository: [github.com/bolet777/plotpilot](https://github.com/bolet777/plotpilo
 - Lint/format (Ruff) and tests (pytest)
 - A minimal placeholder window to confirm the app boots
 
-**Not implemented yet:** SVG open/parse, layer UI, preview, AxiDraw or device
-communication, plotting, PyInstaller `.app`, or release CI.
+**Not implemented yet:** release CI, code signing, or notarization for the macOS
+`.app`.
 
-Planned first feature slice: **001-svg-open**.
+Local macOS bundle: `./lance.sh` (see [010 quickstart](specs/010-macos-app-bundle/quickstart.md)).
 
 ## macOS focus
 
@@ -45,13 +45,21 @@ cd plotpilot
 uv sync --group dev
 ```
 
-## Run the placeholder app
+## Run the app
+
+**Packaged app (correct Dock name and icon on macOS):**
+
+```bash
+./lance.sh
+```
+
+Builds `dist/PlotPilot.app` with PyInstaller and opens it. Use `./lance.sh --no-build` to relaunch without rebuilding. Details: [specs/010-macos-app-bundle/quickstart.md](specs/010-macos-app-bundle/quickstart.md).
+
+**From source (fast dev loop; Dock may show Python):**
 
 ```bash
 uv run plotpilot
 ```
-
-You should see a small window titled **PlotPilot** with a short status message.
 
 ## Quality commands
 
