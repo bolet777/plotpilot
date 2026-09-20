@@ -27,6 +27,7 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import PLOT_CANCEL_WAIT, AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
+from plotpilot.services.bounds_service import plot_bounds_block_message
 from plotpilot.services.plot_service import plot_svg_for_layer, validate_layer_plot_svg
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.svg.plot_dimensions import PlotDimensionError
@@ -376,6 +377,13 @@ class PlotterService(QObject):
         if not self._status.is_connected:
             return "AxiDraw is not connected."
 
+        plot_settings = (
+            plot_settings if plot_settings is not None else self._snapshot_plot_settings()
+        )
+        bounds_error = plot_bounds_block_message(document.raw_text, plot_settings)
+        if bounds_error is not None:
+            return bounds_error
+
         svg_text = plot_svg_for_layer(document, layer)
         try:
             validate_layer_plot_svg(svg_text)
@@ -384,9 +392,7 @@ class PlotterService(QObject):
 
         temp_path = _write_temp_svg(svg_text)
         self._temp_plot_path = temp_path
-        self._active_plot_settings = (
-            plot_settings if plot_settings is not None else self._snapshot_plot_settings()
-        )
+        self._active_plot_settings = plot_settings
         self._plot_in_flight = True
         self._pause_auto_detect_for_hardware()
         self._plot_exit_event.clear()
@@ -402,8 +408,7 @@ class PlotterService(QObject):
             f"Plotting: {layer.name}",
         )
 
-        plot_settings = self._active_plot_settings
-        self._start_plot_estimate(temp_path, plot_settings)
+        self._start_plot_estimate(temp_path, self._active_plot_settings)
 
         def _run_plot() -> PlotResult:
             return self._backend.plot_svg(temp_path, settings=plot_settings)

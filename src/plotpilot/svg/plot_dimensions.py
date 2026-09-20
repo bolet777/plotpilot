@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
 from plotpilot.svg.parse import is_svg_root
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalSize:
+    width_mm: float
+    height_mm: float
+
 
 _LENGTH_RE = re.compile(
     r"^\s*(?P<value>-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(?P<unit>[a-zA-Z%]*)\s*$"
@@ -31,8 +39,19 @@ class PlotDimensionError(Exception):
         self.user_message = user_message
 
 
+def parse_physical_size(svg_text: str) -> PhysicalSize:
+    """Return physical page size from root width/height or raise PlotDimensionError."""
+    width_mm, height_mm = _read_root_dimensions_mm(svg_text)
+    return PhysicalSize(width_mm=width_mm, height_mm=height_mm)
+
+
 def validate_plot_svg_dimensions(svg_text: str) -> tuple[float, float]:
     """Return (width_mm, height_mm) or raise PlotDimensionError."""
+    size = parse_physical_size(svg_text)
+    return size.width_mm, size.height_mm
+
+
+def _read_root_dimensions_mm(svg_text: str) -> tuple[float, float]:
     try:
         root = ET.fromstring(svg_text)
     except ET.ParseError as exc:
