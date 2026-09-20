@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
+from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plot_progress import PlotProgress
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
@@ -30,6 +31,7 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
+from plotpilot.services.bounds_service import check_plot_bounds
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
@@ -78,6 +80,7 @@ class MainWindow(QMainWindow):
         self._document: SvgDocument | None = None
         self._layers: list[SvgLayer] = []
         self._updating_layers = False
+        self._bounds_check: PlotBoundsCheck | None = None
 
         backend = plotter_backend if plotter_backend is not None else AxiDrawCliBackend()
         self._settings_service = (
@@ -211,7 +214,12 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(plotter_buttons)
 
         self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
+        self._plot_settings.user_changed.connect(self._refresh_bounds_status)
         root_layout.addWidget(self._plot_settings)
+
+        self._bounds_status_label = QLabel("", central)
+        self._bounds_status_label.setWordWrap(True)
+        root_layout.addWidget(self._bounds_status_label)
 
         self._plot_progress_headline = QLabel("", central)
         self._plot_progress_headline.setWordWrap(True)
@@ -260,6 +268,7 @@ class MainWindow(QMainWindow):
         self._apply_plot_state(self._plotter_service.plot_state)
         self._apply_plot_progress(self._plotter_service.plot_progress)
         self._apply_multi_layer_job(self._multi_layer_service.job)
+        self._refresh_bounds_status()
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
 
@@ -422,8 +431,9 @@ class MainWindow(QMainWindow):
             and not plot_active
             and not job_active
         )
-        can_plot_single = can_start and layer is not None
-        can_plot_multi = can_start and len(checked) >= 1
+        bounds_block = self._bounds_check is not None and self._bounds_check.blocks_plotting
+        can_plot_single = can_start and layer is not None and not bounds_block
+        can_plot_multi = can_start and len(checked) >= 1 and not bounds_block
         self._plot_layer_button.setEnabled(can_plot_single)
         self._plot_checked_button.setEnabled(can_plot_multi)
         stop_enabled = (plot_active or job_active) and not stopping
@@ -642,7 +652,35 @@ class MainWindow(QMainWindow):
     def set_document(self, document: SvgDocument) -> None:
         """Replace the active document and layer list (used after successful load)."""
         self._apply_document(document)
+        self._refresh_bounds_status()
         self._update_plot_controls()
+
+    def _refresh_bounds_status(self) -> None:
+        document = self._document
+        if document is None:
+            self._bounds_check = None
+            self._bounds_status_label.setText("")
+            self._bounds_status_label.setStyleSheet("")
+            return
+
+        self._bounds_check = check_plot_bounds(
+            document.raw_text,
+            self._settings_service.plot_settings,
+        )
+        prefix, color = _bounds_status_style(self._bounds_check.status)
+        self._bounds_status_label.setText(f"{prefix}{self._bounds_check.message}")
+        self._bounds_status_label.setStyleSheet(f"color: {color};")
+        self._update_plot_controls()
+
+
+def _bounds_status_style(status: BoundsStatus) -> tuple[str, str]:
+    if status is BoundsStatus.OK:
+        return "✓ ", "#1a7f37"
+    if status is BoundsStatus.UNKNOWN_MODEL:
+        return "⚠ ", "#9a6700"
+    if status is BoundsStatus.OUT_OF_BOUNDS:
+        return "✕ ", "#cf222e"
+    return "✕ ", "#cf222e"
 
 
 def _color_swatch_text(color: str | None) -> str:
