@@ -40,9 +40,9 @@ Keep third-party dependencies minimal and justified.
 
 - **Language**: Python 3.12
 - **UI**: PySide6 (Qt)
-- **Plotters**: AxiDraw via dedicated adapter(s) under `plotpilot/plotter/` (future)
-- **Layout**: `src/plotpilot/` with `app`, `ui`, `svg`, `plotter`, `services`, `models`
-- **Packaging**: PyInstaller `.app` (later); GitHub Actions builds (later)
+- **Plotters**: AxiDraw via `plotpilot/plotter/` (`AxiDrawCliBackend` + `FakePlotterBackend` for tests)
+- **Layout**: `src/plotpilot/` with `app`, `resources`, `ui`, `svg`, `plotter`, `services`, `models`
+- **Packaging**: Local PyInstaller `PlotPilot.app` (`./lance.sh`, slice 010); release CI and signing (later)
 
 ## Quality gates
 
@@ -63,4 +63,4 @@ This constitution overrides ad-hoc decisions. Amendments update this file with
 a version bump and brief rationale. Complexity beyond these rules requires an
 explicit note in the feature plan.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-16 | **Last Amended**: 2026-09-16
+**Version**: 1.1.0 | **Ratified**: 2026-09-16 | **Last Amended**: 2026-09-20

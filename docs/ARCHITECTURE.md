@@ -1,25 +1,29 @@
-# PlotPilot architecture (initial)
+# PlotPilot architecture
 
-High-level layout for the first milestones. This is intentionally small; details
-emerge in SpecKit slices rather than upfront design documents.
+High-level layout of the application as implemented. User capabilities map to
+SpecKit slices **001–010** under `specs/`; this document describes how code is
+organized today.
 
 ## Goals
 
 - macOS desktop app for pen plotters (AxiDraw first)
-- Open SVG, inspect layers, preview one layer, plot one layer at a time
-- Change pen between layers; basic motion and pen settings
+- Open SVG, inspect layers, preview one layer, plot one or many layers
+- Pen changes between layers in multi-layer mode
 - Test core logic without hardware
 
 ## Module map
 
-```
+```text
 src/plotpilot/
-  app/       Application entry, Qt app lifecycle
-  ui/        Windows, widgets, user actions (no serial/USB/plotter calls)
-  svg/       Parse SVG, list layers, paths for preview/plot prep
-  plotter/   Plotter interface + AxiDraw (and future devices)
-  services/  Use-cases: open file, select layer, build job, send to plotter
-  models/    Layer, document, plot settings, job state
+  app/           `run()`, macOS Dock/menu branding (`macos.py`)
+  resources/     App icons (PNG sizes + `plotpilot.icns`)
+  ui/            MainWindow, LayerPreviewWidget, PlotSettingsWidget
+  svg/           parse.py, layers.py, preview.py
+  plotter/       PlotterBackend protocol, axidraw.py (axicli), fake.py
+  services/      svg_loader, layer_service, preview_service, plot_service,
+                 plotter_service, multi_layer_plot_service, settings_service
+  models/        SvgDocument, SvgLayer, plot jobs, PlotterStatus, PlotSettings, …
+packaging/macos/ PyInstaller `entry.py` + `plotpilot.spec` → dist/PlotPilot.app
 ```
 
 ## Dependency direction
@@ -36,16 +40,67 @@ flowchart TB
 ```
 
 - **ui** calls **services** only (not `plotter` or low-level SVG parsers directly).
-- **services** coordinates **models**, **svg**, and **plotter**.
-- **plotter** exposes a narrow interface (connect, pen up/down, plot paths, settings).
+- **services** coordinate **models**, **svg**, and **plotter**.
+- **plotter** exposes detect, pen, plot, walk_home, disable_xy via `PlotterBackend`.
 - **svg** has no Qt imports.
 
-## SpecKit alignment
+## Main flows
 
-Each user-facing capability is a slice under `specs/NNN-slug/` with its own
-`spec.md`, plan, and tasks. The next planned slice after **003-layer-preview** is **004-axidraw-connect**.
+### Open SVG
 
-## Out of scope for foundation
+`MainWindow` → `load_svg_from_path` → `parse_svg_text` → `SvgDocument` →
+`layers_for_document` / `extract_layers` → layer list + preview refresh.
 
-SVG parsing, preview rendering, AxiDraw communication, PyInstaller bundling, and
-CI release pipelines are separate slices.
+### Preview
+
+Layer selection → `preview_svg_for_layer` → `LayerPreviewWidget` renders SVG text.
+
+### Single-layer plot
+
+UI → `PlotterService.start_plot_layer` → build layer SVG (`plot_svg_for_layer`) →
+temp file → `AxiDrawCliBackend.plot_svg` (subprocess `axicli`) with snapshotted
+`PlotSettings`.
+
+### Multi-layer plot
+
+UI → `MultiLayerPlotService.start_job` → sequential layer plots →
+`WAITING_FOR_PEN_CHANGE` → user **Continue** → next layer.
+
+### Stop / safe stop
+
+UI **Stop** → cancel plot subprocess if needed → `request_safe_stop`:
+`raise_pen` → `walk_home` → `disable_xy` (ordering enforced in `PlotterService`).
+
+### Plotter connection
+
+`PlotterService` runs detect/pen/plot on `QThreadPool`; idle timer triggers
+passive `detect_presence`; UI binds to `status_changed` and `plot_state_changed`.
+
+## SpecKit alignment (delivered slices)
+
+| Slice | Topic |
+|-------|--------|
+| 001 | Open SVG file |
+| 002 | Layer extraction and list UI |
+| 003 | Layer preview |
+| 004 | AxiDraw connect, pen controls, status |
+| 005 | Plot selected layer |
+| 006 | Plot settings (model, persistence, UI) |
+| 007 | Multi-layer workflow and pen-change waits |
+| 008 | Safe stop and home sequence |
+| 009 | Root SVG groups as layers fallback |
+| 010 | macOS `PlotPilot.app` (PyInstaller, `lance.sh`) |
+
+## Platform notes
+
+- **macOS branding**: `configure_branding()` before Qt; full Dock identity via
+  `dist/PlotPilot.app` (see slice 010).
+- **Icons**: generated from `assets/icons/icon.png` into `resources/icons/` and
+  PyInstaller datas.
+- **Settings**: `SettingsService` uses `QSettings` (platform-native storage).
+
+## Out of scope (current codebase)
+
+- Non-AxiDraw plotters (protocol exists; only CLI backend shipped)
+- GitHub Actions release pipeline, code signing, notarization
+- Serial/USB access from Python (delegated to `axicli`)
