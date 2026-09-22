@@ -35,6 +35,8 @@ class SettingsService(QObject):
         self._application = application
         self._settings = QSettings(organization, application)
         self._current = self._load()
+        self._project_session_active = False
+        self._session_fallback: FallbackWorkArea | None = None
 
     @property
     def plot_settings(self) -> PlotSettings:
@@ -42,19 +44,52 @@ class SettingsService(QObject):
 
     @property
     def preview_fallback_work_area(self) -> FallbackWorkArea:
+        if self._session_fallback is not None:
+            return self._session_fallback
         return self._load_fallback_work_area()
 
+    @property
+    def project_session_active(self) -> bool:
+        return self._project_session_active
+
     def set_preview_fallback_work_area(self, value: FallbackWorkArea) -> None:
+        if self._project_session_active:
+            self._session_fallback = value
+            return
         self._settings.setValue(_KEY_PREVIEW_FALLBACK, value.value)
         self._settings.sync()
+
+    def begin_project_session(
+        self,
+        settings: PlotSettings,
+        fallback: FallbackWorkArea,
+    ) -> None:
+        """Apply project-owned settings without writing global QSettings."""
+        settings.validate()
+        self._project_session_active = True
+        self._session_fallback = fallback
+        self._current = settings
+        self.settings_changed.emit(settings)
+
+    def end_project_session(self) -> None:
+        """Return to global QSettings-backed plot settings and fallback."""
+        self._project_session_active = False
+        self._session_fallback = None
+        self._current = self._load()
+        self.settings_changed.emit(self._current)
 
     def replace(self, settings: PlotSettings) -> None:
         settings.validate()
         self._current = settings
-        self._persist(settings)
+        if not self._project_session_active:
+            self._persist(settings)
         self.settings_changed.emit(settings)
 
     def reset_plot_settings(self) -> None:
+        if self._project_session_active:
+            self._current = PlotSettings()
+            self.settings_changed.emit(self._current)
+            return
         self._settings.remove(_KEY_PEN_DOWN)
         self._settings.remove(_KEY_PEN_UP)
         self._settings.remove(_KEY_ACCEL)

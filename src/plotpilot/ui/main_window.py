@@ -36,6 +36,7 @@ from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plot_progress import PlotProgress
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
+from plotpilot.models.project_session import ProjectSession
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
@@ -49,6 +50,13 @@ from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
     preview_work_area_is_ambiguous,
     resolve_preview_work_area,
+)
+from plotpilot.services.project_file_service import (
+    ProjectFileError,
+    ProjectUnsupportedVersionError,
+    read_project_file,
+    unmatched_layer_ids,
+    write_project_file,
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
@@ -76,6 +84,32 @@ def choose_svg_file(parent: QWidget) -> str | None:
     return file_path
 
 
+def choose_project_file(parent: QWidget) -> str | None:
+    file_path, _selected_filter = QFileDialog.getOpenFileName(
+        parent,
+        "Open Project…",
+        "",
+        "PlotPilot projects (*.plotpilot)",
+    )
+    if not file_path:
+        return None
+    return file_path
+
+
+def choose_save_project_file(parent: QWidget, *, suggested_name: str = "") -> str | None:
+    file_path, _selected_filter = QFileDialog.getSaveFileName(
+        parent,
+        "Save Project As…",
+        suggested_name,
+        "PlotPilot projects (*.plotpilot)",
+    )
+    if not file_path:
+        return None
+    if not file_path.endswith(".plotpilot"):
+        file_path = f"{file_path}.plotpilot"
+    return file_path
+
+
 class MainWindow(QMainWindow):
     """PlotPilot main window."""
 
@@ -85,6 +119,8 @@ class MainWindow(QMainWindow):
         plotter_backend: PlotterBackend | None = None,
         settings_service: SettingsService | None = None,
         svg_file_chooser: Callable[[], str | None] | None = None,
+        project_file_chooser: Callable[[], str | None] | None = None,
+        save_project_file_chooser: Callable[[], str | None] | None = None,
         auto_detect_interval_ms: int | None = None,
         auto_detect_resume_delay_ms: int | None = None,
     ) -> None:
@@ -96,12 +132,16 @@ class MainWindow(QMainWindow):
         self._layers: list[SvgLayer] = []
         self._updating_layers = False
         self._bounds_check: PlotBoundsCheck | None = None
+        self._project_file_path: Path | None = None
+        self._project_dirty = False
 
         backend = plotter_backend if plotter_backend is not None else AxiDrawCliBackend()
         self._settings_service = (
             settings_service if settings_service is not None else SettingsService(parent=self)
         )
         self._svg_file_chooser = svg_file_chooser
+        self._project_file_chooser = project_file_chooser
+        self._save_project_file_chooser = save_project_file_chooser
         self._plotter_service = PlotterService(
             backend,
             settings_service=self._settings_service,
@@ -344,6 +384,15 @@ class MainWindow(QMainWindow):
         self._refresh_preview_work_area()
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
+        self._update_window_title()
+
+    @property
+    def project_file_path(self) -> Path | None:
+        return self._project_file_path
+
+    @property
+    def project_dirty(self) -> bool:
+        return self._project_dirty
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
         self._plotter_service.shutdown()
@@ -356,6 +405,23 @@ class MainWindow(QMainWindow):
         self._open_svg_action.setShortcut(QKeySequence.StandardKey.Open)
         self._open_svg_action.triggered.connect(self._open_svg)
         file_menu.addAction(self._open_svg_action)
+
+        self._open_project_action = QAction("Open Project…", self)
+        self._open_project_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        self._open_project_action.triggered.connect(self._open_project)
+        file_menu.addAction(self._open_project_action)
+
+        file_menu.addSeparator()
+
+        self._save_project_action = QAction("Save Project", self)
+        self._save_project_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._save_project_action.triggered.connect(self._save_project)
+        file_menu.addAction(self._save_project_action)
+
+        self._save_project_as_action = QAction("Save Project As…", self)
+        self._save_project_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._save_project_as_action.triggered.connect(self._save_project_as)
+        file_menu.addAction(self._save_project_as_action)
 
     @property
     def document(self) -> SvgDocument | None:
@@ -535,6 +601,10 @@ class MainWindow(QMainWindow):
         self._preview.set_transform_controls_enabled(not transform_locked)
         self._position_row.setEnabled(not transform_locked)
         self._open_svg_action.setEnabled(not job_active)
+        has_document = self._document is not None
+        self._save_project_action.setEnabled(has_document and not job_active)
+        self._save_project_as_action.setEnabled(has_document and not job_active)
+        self._open_project_action.setEnabled(not job_active)
         allow_preview = job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE
         self._layers_list.setEnabled(not job_active or allow_preview)
         self._updating_layers = True
@@ -666,9 +736,76 @@ class MainWindow(QMainWindow):
             chosen = choose_svg_file(self)
         if not chosen:
             return
+        self._load_svg_document(Path(chosen), reset_transform=True, clear_project=True)
+
+    def _open_project(self) -> None:
+        if self._multi_layer_service.job.is_active:
+            return
+        if self._project_file_chooser is not None:
+            chosen = self._project_file_chooser()
+        else:
+            chosen = choose_project_file(self)
+        if not chosen:
+            return
+        project_path = Path(chosen)
+        try:
+            session = read_project_file(project_path)
+        except ProjectUnsupportedVersionError as exc:
+            QMessageBox.warning(self, "Cannot open project", exc.user_message)
+            return
+        except ProjectFileError as exc:
+            QMessageBox.warning(self, "Cannot open project", exc.user_message)
+            return
+
+        if not session.svg_path.is_file():
+            QMessageBox.warning(
+                self,
+                "Cannot open project",
+                (
+                    "The source SVG for this project could not be found:\n\n"
+                    f"{session.svg_path}\n\n"
+                    "The current document was not changed."
+                ),
+            )
+            return
 
         try:
-            document = load_svg_from_path(Path(chosen))
+            document = load_svg_from_path(session.svg_path)
+        except SvgLoadError as exc:
+            QMessageBox.warning(self, "Could not open SVG", exc.user_message)
+            return
+
+        self._settings_service.begin_project_session(
+            session.plot_settings,
+            session.fallback_work_area,
+        )
+        self._sync_fallback_combo_from_service()
+        self._apply_document(document, reset_transform=False)
+        self._set_artwork_transform(session.artwork_transform, mark_dirty=False)
+        self._restore_checked_layer_ids(session.checked_layer_ids)
+        self._project_file_path = project_path.resolve()
+        self._project_dirty = False
+        self._update_window_title()
+
+        missing = unmatched_layer_ids(session, {layer.layer_id for layer in self._layers})
+        if missing:
+            self._status_label.setText(
+                f"{document.name}\nSome saved layers were not found in the SVG and were skipped.",
+            )
+        else:
+            self._status_label.setText(document.name)
+        self._refresh_bounds_status()
+        self._update_plot_controls()
+
+    def _load_svg_document(
+        self,
+        path: Path,
+        *,
+        reset_transform: bool,
+        clear_project: bool,
+    ) -> None:
+        try:
+            document = load_svg_from_path(path)
         except SvgLoadError as exc:
             QMessageBox.warning(
                 self,
@@ -677,20 +814,144 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.set_document(document)
+        if clear_project:
+            self._clear_project_association()
+        self._apply_document(document, reset_transform=reset_transform)
+        self._refresh_bounds_status()
+        self._update_plot_controls()
+
+    def _clear_project_association(self) -> None:
+        if self._settings_service.project_session_active:
+            self._settings_service.end_project_session()
+            self._sync_fallback_combo_from_service()
+        self._project_file_path = None
+        self._project_dirty = False
+        self._update_window_title()
+
+    def _build_project_session(self) -> ProjectSession | None:
+        document = self._document
+        if document is None:
+            return None
+        checked_ids = tuple(layer.layer_id for layer in self._checked_layers())
+        return ProjectSession(
+            svg_path=document.path,
+            checked_layer_ids=checked_ids,
+            artwork_transform=self._preview.artwork_transform,
+            plot_settings=self._settings_service.plot_settings,
+            fallback_work_area=self._settings_service.preview_fallback_work_area,
+        )
+
+    def _save_project(self) -> None:
+        if self._document is None:
+            return
+        if self._project_file_path is None:
+            self._save_project_as()
+            return
+        self._save_project_at_path(self._project_file_path)
+
+    def _save_project_as(self) -> None:
+        if self._document is None:
+            return
+        suggested = ""
+        if self._project_file_path is not None:
+            suggested = str(self._project_file_path)
+        elif self._document is not None:
+            suggested = str(self._document.path.with_suffix(".plotpilot"))
+        if self._save_project_file_chooser is not None:
+            chosen = self._save_project_file_chooser()
+        else:
+            chosen = choose_save_project_file(self, suggested_name=suggested)
+        if not chosen:
+            return
+        path = Path(chosen)
+        if not self._settings_service.project_session_active:
+            self._settings_service.begin_project_session(
+                self._settings_service.plot_settings,
+                self._settings_service.preview_fallback_work_area,
+            )
+        self._save_project_at_path(path)
+
+    def _save_project_at_path(self, path: Path) -> None:
+        session = self._build_project_session()
+        if session is None:
+            return
+        try:
+            write_project_file(path, session)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Could not save project",
+                f"Could not write the project file:\n\n{exc}",
+            )
+            return
+        self._project_file_path = path.resolve()
+        self._project_dirty = False
+        self._update_window_title()
+        self._status_label.setText(self._document.name if self._document else "")
+
+    def _restore_checked_layer_ids(self, checked_ids: tuple[str, ...]) -> None:
+        wanted = set(checked_ids)
+        self._updating_layers = True
+        for row in range(self._layers_list.count()):
+            item = self._layers_list.item(row)
+            if item is None:
+                continue
+            layer_id = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(layer_id, str) and layer_id in wanted:
+                item.setCheckState(Qt.CheckState.Checked)
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+        self._updating_layers = False
+        self._update_plot_controls()
+
+    def _sync_fallback_combo_from_service(self) -> None:
+        stored_fallback = self._settings_service.preview_fallback_work_area
+        fallback_index = self._fallback_work_area_combo.findData(stored_fallback)
+        if fallback_index >= 0:
+            self._fallback_work_area_combo.blockSignals(True)
+            self._fallback_work_area_combo.setCurrentIndex(fallback_index)
+            self._fallback_work_area_combo.blockSignals(False)
+
+    def _mark_project_dirty(self) -> None:
+        if self._document is None:
+            return
+        if not self._project_dirty:
+            self._project_dirty = True
+            self._update_window_title()
+
+    def _update_window_title(self) -> None:
+        dirty_suffix = " *" if self._project_dirty else ""
+        if self._project_file_path is not None:
+            self.setWindowTitle(f"PlotPilot — {self._project_file_path.name}{dirty_suffix}")
+            return
+        if self._document is not None:
+            self.setWindowTitle(f"PlotPilot — {self._document.name}{dirty_suffix}")
+            return
+        self.setWindowTitle("PlotPilot")
 
     def _sync_preview_empty_state(self) -> None:
         has_document = self._document is not None
         self._preview_stack.setCurrentIndex(1 if has_document else 0)
         self._open_svg_persistent_button.setVisible(has_document)
 
-    def _apply_document(self, document: SvgDocument) -> None:
-        self._set_artwork_transform(ArtworkTransform.identity())
+    def _apply_document(self, document: SvgDocument, *, reset_transform: bool = True) -> None:
+        if reset_transform:
+            transform = ArtworkTransform.identity()
+            transform.validate()
+            self._preview.set_artwork_transform(transform)
+            self._sync_artwork_controls_from_preview()
         self._document = document
         self._layers = layers_for_document(document)
         self._status_label.setText(document.name)
         self._sync_preview_empty_state()
         self._refresh_layers_list()
+        self._update_window_title()
+
+    def set_document(self, document: SvgDocument) -> None:
+        """Replace the active document and layer list (used after successful load)."""
+        self._apply_document(document, reset_transform=True)
+        self._refresh_bounds_status()
+        self._update_plot_controls()
 
     def _refresh_layers_list(self) -> None:
         self._updating_layers = True
@@ -722,6 +983,7 @@ class MainWindow(QMainWindow):
         if self._multi_layer_service.job.is_active:
             return
         _ = item
+        self._mark_project_dirty()
         self._update_plot_controls()
 
     def _update_preview_for_current_layer(self) -> None:
@@ -739,13 +1001,8 @@ class MainWindow(QMainWindow):
         self._preview.set_preview_svg(svg_text)
         self._refresh_preview_work_area()
 
-    def set_document(self, document: SvgDocument) -> None:
-        """Replace the active document and layer list (used after successful load)."""
-        self._apply_document(document)
-        self._refresh_bounds_status()
-        self._update_plot_controls()
-
     def _on_plot_settings_changed(self) -> None:
+        self._mark_project_dirty()
         self._sync_fallback_work_area_visibility()
         self._refresh_bounds_status()
         self._refresh_preview_work_area()
@@ -755,6 +1012,7 @@ class MainWindow(QMainWindow):
         if not isinstance(area, FallbackWorkArea):
             return
         self._settings_service.set_preview_fallback_work_area(area)
+        self._mark_project_dirty()
         self._refresh_preview_work_area()
 
     def _sync_fallback_work_area_visibility(self) -> None:
@@ -820,16 +1078,24 @@ class MainWindow(QMainWindow):
             spin.setValue(value)
             spin.blockSignals(False)
 
-    def _set_artwork_transform(self, transform: ArtworkTransform) -> None:
+    def _set_artwork_transform(
+        self,
+        transform: ArtworkTransform,
+        *,
+        mark_dirty: bool = True,
+    ) -> None:
         transform.validate()
         self._preview.set_artwork_transform(transform)
         self._sync_artwork_controls_from_preview()
         self._refresh_artwork_status()
+        if mark_dirty:
+            self._mark_project_dirty()
 
     def _on_preview_artwork_dragged(self, transform: object) -> None:
         if isinstance(transform, ArtworkTransform):
             self._sync_artwork_controls_from_preview()
             self._refresh_artwork_status()
+            self._mark_project_dirty()
 
     def _on_artwork_position_spin_changed(self, _value: float) -> None:
         moved = ArtworkTransform(
