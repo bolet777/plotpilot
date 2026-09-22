@@ -48,6 +48,19 @@ def wait_for_plot_started(service: PlotterService, *, timeout_ms: int = 3000) ->
     )
 
 
+def wait_for_fake_plot_invocation(
+    fake: object,
+    *,
+    count: int = 1,
+    timeout_ms: int = 3000,
+) -> None:
+    """Wait until the fake backend has entered ``plot_svg`` *count* times."""
+    wait_until(
+        lambda: len(getattr(fake, "plot_settings_used", [])) >= count,
+        timeout_ms=timeout_ms,
+    )
+
+
 def wait_for_plot_finished(service: PlotterService, *, timeout_ms: int = 3000) -> None:
     wait_until(
         lambda: service.plot_state.phase in _TERMINAL_PLOT_PHASES and not service._plot_in_flight,  # noqa: SLF001

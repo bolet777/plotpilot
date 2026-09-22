@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.multi_layer_job import MultiLayerJobState
 from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plot_settings import PlotSettings
@@ -139,6 +140,36 @@ def test_settings_snapshot_used(qapp) -> None:
     service.start_job(document, [layers[0]], settings=snapshot)
     wait_until(lambda: len(fake.plot_paths) >= 1)
     assert fake.plot_settings_used[-1] == snapshot
+
+
+def test_artwork_transform_snapshot_persists_for_all_layers(qapp) -> None:
+    service, plotter, fake = _connected_stack(qapp)
+    document, layers = _two_layers()
+    transform_a = ArtworkTransform(x_mm=7.5, y_mm=-2.0, scale=1.25)
+    transform_b = ArtworkTransform(x_mm=99.0, y_mm=99.0, scale=0.5)
+    transforms_used: list[ArtworkTransform | None] = []
+    real_start = plotter.start_plot_layer
+
+    def _record_start(document, layer, **kwargs):
+        transforms_used.append(kwargs.get("artwork_transform"))
+        return real_start(document, layer, **kwargs)
+
+    plotter.start_plot_layer = _record_start  # type: ignore[method-assign]
+    service.start_job(
+        document,
+        layers,
+        settings=PlotSettings(model=1),
+        artwork_transform=transform_a,
+    )
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert service.job.artwork_transform == transform_a
+    assert transforms_used == [transform_a]
+    # UI may change current transform after job start; job snapshot must stay A for layer 2.
+    assert transform_b != transform_a
+    service.continue_after_pen_change()
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
+    assert len(fake.plot_paths) == 2
+    assert transforms_used == [transform_a, transform_a]
 
 
 def test_multi_layer_each_invocation_gets_reordering_snapshot(qapp) -> None:
