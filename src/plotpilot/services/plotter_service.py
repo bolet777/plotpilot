@@ -109,6 +109,8 @@ class PlotterService(QObject):
     plot_state_changed = Signal(object)
     plot_progress_changed = Signal(object)
     safe_stop_finished = Signal(object)
+    manual_command_finished = Signal(str, object)
+    pen_up_finished = Signal(object)
 
     def __init__(
         self,
@@ -140,7 +142,7 @@ class PlotterService(QObject):
         self._detect_in_flight = False
         self._pending_refresh = False
         self._pending_presence_after_resume = False
-        self._operation_in_flight = False
+        self._manual_operation: str | None = None
         self._plot_in_flight = False
         self._safe_stop_in_flight = False
         self._safe_stop_wait_for_plot = False
@@ -275,7 +277,7 @@ class PlotterService(QObject):
     def _is_hardware_busy(self) -> bool:
         if (
             self._plot_in_flight
-            or self._operation_in_flight
+            or self._manual_operation is not None
             or self._safe_stop_in_flight
             or self._plot_state.is_active
         ):
@@ -339,25 +341,28 @@ class PlotterService(QObject):
             return
         self._begin_presence_detect()
 
-    def pen_up(self) -> None:
-        if (
-            not self._status.pen_commands_enabled
-            or self._operation_in_flight
-            or self._plot_in_flight
-            or self._safe_stop_in_flight
-        ):
-            return
+    def pen_up(self) -> bool:
+        """Queue raise_pen on the worker thread. Returns False if not accepted."""
+        if not self._can_queue_manual_pen_command():
+            return False
         self._run_async(self._backend.pen_up, "pen_up")
+        return True
 
-    def pen_down(self) -> None:
-        if (
-            not self._status.pen_commands_enabled
-            or self._operation_in_flight
-            or self._plot_in_flight
-            or self._safe_stop_in_flight
-        ):
-            return
+    def pen_down(self) -> bool:
+        """Queue lower_pen on the worker thread. Returns False if not accepted."""
+        if not self._can_queue_manual_pen_command():
+            return False
         self._run_async(self._backend.pen_down, "pen_down")
+        return True
+
+    def _can_queue_manual_pen_command(self) -> bool:
+        if not self._status.pen_commands_enabled:
+            return False
+        if self._plot_in_flight or self._safe_stop_in_flight:
+            return False
+        if self._manual_operation is not None:
+            return False
+        return True
 
     def start_plot_layer(
         self,
@@ -518,8 +523,8 @@ class PlotterService(QObject):
         operation: Callable[[], object],
         operation_name: str,
     ) -> None:
-        if operation_name not in ("plot", "estimate"):
-            self._operation_in_flight = True
+        if operation_name in ("pen_up", "pen_down", "detect", "detect_presence"):
+            self._manual_operation = operation_name
         if operation_name in ("plot", "pen_up", "pen_down", "safe_stop"):
             self._pause_auto_detect_for_hardware()
         signals = _PlotterTaskSignals(self)
@@ -532,7 +537,6 @@ class PlotterService(QObject):
         if self._shutdown:
             return
         if operation_name == "estimate":
-            self._operation_in_flight = False
             if self._progress_started_monotonic is not None and self._plot_state.phase in (
                 PlotPhase.RUNNING,
                 PlotPhase.STOPPING,
@@ -605,10 +609,22 @@ class PlotterService(QObject):
             self._schedule_auto_detect_resume()
             return
 
-        self._operation_in_flight = False
+        if operation_name in ("pen_up", "pen_down"):
+            if self._manual_operation == operation_name:
+                self._manual_operation = None
+            if isinstance(result, PlotterStatus):
+                self._status = result
+                self.status_changed.emit(result)
+            self.manual_command_finished.emit(operation_name, result)
+            if operation_name == "pen_up":
+                self.pen_up_finished.emit(result)
+            self._schedule_auto_detect_resume()
+            return
+
         if operation_name in ("detect", "detect_presence"):
+            if self._manual_operation == operation_name:
+                self._manual_operation = None
             self._detect_in_flight = False
-            self._operation_in_flight = False
             if operation_name == "detect" and isinstance(result, PlotterStatus):
                 self._publish_status(result)
             elif operation_name == "detect_presence" and isinstance(result, PlotterStatus):

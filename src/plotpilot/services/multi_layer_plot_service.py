@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from plotpilot.models.multi_layer_job import (
     MultiLayerJobLayer,
@@ -23,6 +24,9 @@ from plotpilot.services.plotter_service import PlotterService
 
 logger = logging.getLogger(__name__)
 
+_PEN_UP_RETRY_MS = 100
+_PEN_UP_RETRY_TIMEOUT_SECONDS = 30.0
+
 
 class MultiLayerPlotService(QObject):
     """Runs a multi-layer job on top of PlotterService without auto-continuing."""
@@ -38,10 +42,11 @@ class MultiLayerPlotService(QObject):
         self._document: SvgDocument | None = None
         self._layer_by_id: dict[str, SvgLayer] = {}
         self._pen_up_wait = False
+        self._pen_up_retry_started_monotonic: float | None = None
         self._continue_in_flight = False
         self._awaiting_stop_cleanup = False
         self._plotter.plot_state_changed.connect(self._on_plot_state_changed)
-        self._plotter.status_changed.connect(self._on_plotter_status_changed)
+        self._plotter.pen_up_finished.connect(self._on_pen_up_finished)
         self._plotter.safe_stop_finished.connect(self._on_safe_stop_finished)
 
     @property
@@ -73,7 +78,7 @@ class MultiLayerPlotService(QObject):
         self._document = document
         self._layer_by_id = {layer.layer_id: layer for layer in layers}
         self._continue_in_flight = False
-        self._pen_up_wait = False
+        self._clear_pen_up_wait()
         self._set_job(
             MultiLayerPlotJob(
                 layers=snapshots,
@@ -121,7 +126,7 @@ class MultiLayerPlotService(QObject):
             return
         if self._awaiting_stop_cleanup:
             return
-        self._pen_up_wait = False
+        self._clear_pen_up_wait()
         self._awaiting_stop_cleanup = True
         self._plotter.request_safe_stop()
 
@@ -195,6 +200,13 @@ class MultiLayerPlotService(QObject):
 
     def _on_layer_plot_succeeded(self) -> None:
         completed = self._job.completed_count + 1
+        layer_just_finished = self._job.layers[self._job.current_index]
+        logger.debug(
+            "multi-layer: layer %s plot succeeded (%s/%s)",
+            completed,
+            completed,
+            self._job.total_layers,
+        )
         is_last = completed >= self._job.total_layers
         if is_last:
             total = self._job.total_layers
@@ -217,8 +229,61 @@ class MultiLayerPlotService(QObject):
                 current_index=self._job.current_index + 1,
             )
         )
+        self._begin_pen_up_for_pen_change(layer_just_finished.name)
+
+    def _begin_pen_up_for_pen_change(self, completed_layer_name: str) -> None:
+        nxt = self._job.current_layer
+        if nxt is None:
+            self._fail_job("Missing next layer after plot success.")
+            return
+        logger.debug(
+            "multi-layer: requesting pen up before pen change to layer %s (after %s)",
+            nxt.name,
+            completed_layer_name,
+        )
         self._pen_up_wait = True
-        self._plotter.pen_up()
+        self._pen_up_retry_started_monotonic = time.monotonic()
+        self._request_pen_up()
+
+    def _request_pen_up(self) -> None:
+        if not self._pen_up_wait:
+            return
+        if self._job.state is not MultiLayerJobState.PLOTTING:
+            self._clear_pen_up_wait()
+            return
+        if self._awaiting_stop_cleanup:
+            self._clear_pen_up_wait()
+            return
+
+        if self._plotter.pen_up():
+            logger.debug("multi-layer: pen up queued")
+            return
+
+        started = self._pen_up_retry_started_monotonic
+        if started is not None and time.monotonic() - started > _PEN_UP_RETRY_TIMEOUT_SECONDS:
+            self._clear_pen_up_wait()
+            self._fail_job("Timed out waiting to raise pen before pen change.")
+            return
+
+        logger.debug("multi-layer: pen up deferred, will retry")
+        QTimer.singleShot(_PEN_UP_RETRY_MS, self._request_pen_up)
+
+    def _on_pen_up_finished(self, result: object) -> None:
+        if not self._pen_up_wait:
+            return
+        self._clear_pen_up_wait()
+        status = result if isinstance(result, PlotterStatus) else None
+        if status is None:
+            self._fail_job("Pen raise failed before pen change.")
+            return
+        if status.state is PlotterConnectionState.ERROR:
+            self._fail_job(status.message or "Could not raise pen before pen change.")
+            return
+        if status.state is not PlotterConnectionState.CONNECTED:
+            self._fail_job("AxiDraw disconnected before pen change.")
+            return
+        logger.debug("multi-layer: pen up finished")
+        self._enter_pen_change_wait()
 
     def _on_safe_stop_finished(self, result: SafeStopResult) -> None:
         if not self._awaiting_stop_cleanup:
@@ -239,23 +304,12 @@ class MultiLayerPlotService(QObject):
             )
         )
 
-    def _on_plotter_status_changed(self, status: PlotterStatus) -> None:
-        if not self._pen_up_wait:
-            return
-        self._pen_up_wait = False
-        if status.state is PlotterConnectionState.ERROR:
-            self._fail_job(status.message or "Could not raise pen before pen change.")
-            return
-        if status.state is not PlotterConnectionState.CONNECTED:
-            self._fail_job("AxiDraw disconnected before pen change.")
-            return
-        self._enter_pen_change_wait()
-
     def _enter_pen_change_wait(self) -> None:
         nxt = self._job.current_layer
         if nxt is None:
             self._fail_job("Missing next layer after pen raise.")
             return
+        logger.debug("multi-layer: waiting for pen change to layer %s", nxt.name)
         self._set_job(
             replace(
                 self._job,
@@ -289,12 +343,16 @@ class MultiLayerPlotService(QObject):
         self._job = job
         self.job_changed.emit(job)
 
+    def _clear_pen_up_wait(self) -> None:
+        self._pen_up_wait = False
+        self._pen_up_retry_started_monotonic = None
+
     def _reset_job(self, final_job: MultiLayerPlotJob) -> None:
         self._set_job(final_job)
         self._document = None
         self._layer_by_id = {}
         self._continue_in_flight = False
-        self._pen_up_wait = False
+        self._clear_pen_up_wait()
 
 
 def _snapshot_layer(layer: SvgLayer) -> MultiLayerJobLayer:

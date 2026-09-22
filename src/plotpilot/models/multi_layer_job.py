@@ -70,8 +70,7 @@ class MultiLayerPlotJob:
         if not self.layers or self.state is MultiLayerJobState.IDLE:
             return ""
         if self.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
-            nxt = self.next_layer
-            if nxt is None:
+            if self.current_layer is None:
                 return ""
             return f"Layer {self.completed_count} of {self.total_layers} complete"
         layer = self.current_layer

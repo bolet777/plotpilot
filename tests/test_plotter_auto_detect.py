@@ -66,7 +66,7 @@ def _wait_until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
 
 def _wait_for_detection_idle(service: PlotterService, timeout_ms: int = 8000) -> None:
     _wait_until(
-        lambda: not service._detect_in_flight and not service._operation_in_flight,  # noqa: SLF001
+        lambda: not service._detect_in_flight and service._manual_operation is None,  # noqa: SLF001
         timeout_ms=timeout_ms,
     )
 
@@ -292,7 +292,7 @@ def test_polling_suspended_during_pen_commands(qapp) -> None:
     _assert_presence_stable_while(
         fake,
         presence_before,
-        lambda: service._operation_in_flight and not pen_done["ok"],  # noqa: SLF001
+        lambda: service._manual_operation is not None and not pen_done["ok"],  # noqa: SLF001
         timeout_ms=3000,
     )
     if not pen_done["ok"]:

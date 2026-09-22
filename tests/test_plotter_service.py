@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
@@ -81,14 +83,14 @@ def test_pen_buttons_logic_via_fake(qapp) -> None:
         detect_result=PlotterStatus(state=PlotterConnectionState.DISCONNECTED)
     )
     service = PlotterService(fake)
-    service.pen_up()
+    assert service.pen_up() is False
     QCoreApplication.processEvents()
     assert fake.pen_up_calls == 0
 
     fake.detect_result = PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok")
     service.refresh()
     _wait_for_signal(service.status_changed)
-    service.pen_up()
+    assert service.pen_up() is True
     _wait_for_signal(service.status_changed)
     assert fake.pen_up_calls == 1
 
@@ -114,6 +116,41 @@ def test_failed_pen_does_not_crash_service(qapp) -> None:
     service.pen_up()
     _wait_for_signal(service.status_changed)
     assert service.status.state is PlotterConnectionState.ERROR
+
+
+def test_estimate_finish_does_not_clear_in_flight_pen_up(qapp) -> None:
+    """Estimate completion must not release the manual-operation slot used by pen_up."""
+    import threading
+
+    fake = FakePlotterBackend(
+        detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
+    )
+    pen_started = threading.Event()
+
+    original_pen_up = fake.pen_up
+
+    def slow_pen_up() -> PlotterStatus:
+        pen_started.set()
+        time.sleep(0.15)
+        return original_pen_up()
+
+    fake.pen_up = slow_pen_up  # type: ignore[method-assign]
+
+    service = PlotterService(fake)
+    service._status = fake.detect_result  # noqa: SLF001
+    assert service.pen_up() is True
+    _wait_until(lambda: pen_started.is_set(), qapp)
+    assert service._manual_operation == "pen_up"  # noqa: SLF001
+    QCoreApplication.processEvents()
+    assert service._manual_operation == "pen_up"  # noqa: SLF001
+    _wait_for_signal(service.pen_up_finished)
+    assert service._manual_operation is None  # noqa: SLF001
+
+
+def _wait_until(predicate, qapp, timeout_ms: int = 3000) -> None:
+    from qt_helpers import wait_until
+
+    wait_until(predicate, timeout_ms=timeout_ms)
 
 
 def test_coalesced_refresh(qapp) -> None:

@@ -174,3 +174,123 @@ def test_pen_change_metadata(qapp) -> None:
     service.start_job(document, layers, settings=PlotSettings())
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     assert captured[0].name == layers[1].name
+
+
+def test_waiting_progress_label_two_layers(qapp) -> None:
+    service, _plotter, _fake = _connected_stack(qapp)
+    document, layers = _two_layers()
+    service.start_job(document, layers, settings=PlotSettings())
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert service.job.progress_label == "Layer 1 of 2 complete"
+    assert service.job.current_layer is not None
+    assert service.job.current_layer.name == layers[1].name
+
+
+def test_three_layer_workflow(qapp) -> None:
+    service, _plotter, fake = _connected_stack(qapp)
+    document = load_svg_from_path(FIXTURES / "three_root_groups.svg")
+    layers = layers_for_document(document)[:3]
+    service.start_job(document, layers, settings=PlotSettings())
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert len(fake.plot_paths) == 1
+    service.continue_after_pen_change()
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert len(fake.plot_paths) == 2
+    service.continue_after_pen_change()
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
+    assert len(fake.plot_paths) == 3
+
+
+def test_no_safe_stop_between_layers(qapp) -> None:
+    service, _plotter, fake = _connected_stack(qapp)
+    document, layers = _two_layers()
+    service.start_job(document, layers, settings=PlotSettings())
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert fake.walk_home_calls == 0
+    assert fake.disable_xy_calls == 0
+    assert "raise_pen" in fake.manual_sequence
+    service.continue_after_pen_change()
+    _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
+    assert fake.walk_home_calls == 0
+    assert fake.disable_xy_calls == 0
+
+
+def test_status_changed_does_not_skip_pen_up(qapp) -> None:
+    service, plotter, fake = _connected_stack(qapp)
+    document, layers = _two_layers()
+    service.start_job(document, layers, settings=PlotSettings())
+    wait_until(lambda: fake.plot_paths)
+    plotter.status_changed.emit(
+        PlotterStatus(state=PlotterConnectionState.CONNECTED, message="presence ping")
+    )
+    QApplication.processEvents()
+    assert service.job.state is MultiLayerJobState.PLOTTING
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+
+
+def test_pen_up_failure_errors_job(qapp) -> None:
+    fake = FakePlotterBackend(
+        detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
+        pen_up_result=PlotterStatus(
+            state=PlotterConnectionState.ERROR,
+            message="raise_pen failed",
+        ),
+    )
+    plotter = PlotterService(fake)
+    plotter._status = fake.detect_result  # noqa: SLF001
+    service = MultiLayerPlotService(plotter)
+    document, layers = _two_layers()
+    service.start_job(document, layers, settings=PlotSettings())
+    _wait_for_job_state(service, MultiLayerJobState.ERROR)
+    assert "raise_pen failed" in service.job.message
+
+
+def test_pen_up_deferred_while_detect_busy_then_recovers(qapp) -> None:
+    import threading
+
+    fake = FakePlotterBackend(
+        detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok"),
+    )
+    detect_started = threading.Event()
+    detect_release = threading.Event()
+
+    original_detect = fake.detect
+
+    def slow_detect() -> PlotterStatus:
+        detect_started.set()
+        detect_release.wait(timeout=5.0)
+        return original_detect()
+
+    fake.detect = slow_detect  # type: ignore[method-assign]
+    plotter = PlotterService(fake, auto_detect_interval_ms=60_000)
+    plotter._status = fake.detect_result  # noqa: SLF001
+    service = MultiLayerPlotService(plotter)
+    document, layers = _two_layers()
+    plotter.refresh()
+    wait_until(lambda: detect_started.is_set(), timeout_ms=3000)
+    service.start_job(document, layers, settings=PlotSettings())
+    wait_until(lambda: fake.plot_paths, timeout_ms=5000)
+    wait_until(lambda: service._pen_up_wait, timeout_ms=3000)  # noqa: SLF001
+    assert fake.pen_up_calls == 0
+    detect_release.set()
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    assert fake.pen_up_calls >= 1
+
+
+def test_continue_enabled_after_first_layer(qapp) -> None:
+    from plotpilot.ui.main_window import MainWindow
+
+    fake = FakePlotterBackend(
+        detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok")
+    )
+    window = MainWindow(plotter_backend=fake)
+    window.plotter_service._status = fake.detect_result  # noqa: SLF001
+    window._apply_plotter_status(fake.detect_result)
+    document, layers = _two_layers()
+    window.set_document(document)
+    service = window.multi_layer_service
+    service.start_job(document, layers, settings=PlotSettings())
+    _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
+    window._update_plot_controls()
+    assert window._multi_continue_button.isEnabled()
+    assert window._plot_stop_button.isEnabled()
