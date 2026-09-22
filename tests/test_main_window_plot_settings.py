@@ -6,7 +6,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plotpilot.models.plot_job import PlotPhase, PlotResult
@@ -16,6 +15,7 @@ from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
+from qt_helpers import wait_for_plot_finished, wait_for_plot_started, wait_for_plot_success
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -26,17 +26,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def _window(qapp) -> tuple[MainWindow, FakePlotterBackend, SettingsService]:
@@ -70,10 +59,10 @@ def test_settings_disabled_while_plotting(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_started(window.plotter_service)
     assert not window._plot_settings._pen_down_slider.isEnabled()  # noqa: SLF001
     window.plotter_service.cancel_plot()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_finished(window.plotter_service)
     assert window._plot_settings._pen_down_slider.isEnabled()  # noqa: SLF001
 
 
@@ -85,8 +74,7 @@ def test_settings_reenabled_after_success(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     assert window.plotter_service.plot_state.phase is PlotPhase.SUCCEEDED
     assert window._plot_settings._model_combo.isEnabled()  # noqa: SLF001
 
@@ -100,8 +88,7 @@ def test_settings_reenabled_after_failure(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_finished(window.plotter_service)
     assert window.plotter_service.plot_state.phase is PlotPhase.FAILED
     assert window._plot_settings._accel_slider.isEnabled()  # noqa: SLF001
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plot_estimate import PlotEstimate, parse_preview_report
@@ -30,6 +29,7 @@ from plotpilot.ui.plot_progress_labels import (
     progress_headline,
     progress_timing_line,
 )
+from qt_helpers import wait_for_plot_started, wait_for_plot_success, wait_for_safe_stop
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -48,17 +48,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def test_idle_plot_progress() -> None:
@@ -163,8 +152,7 @@ def test_plotter_service_progress_with_estimate(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     assert service.start_plot_layer(document, layers[0]) is None
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_success(service)
     assert fake.estimate_paths
     assert service.plot_state.phase is PlotPhase.SUCCEEDED
     assert any(
@@ -188,8 +176,7 @@ def test_estimate_failure_does_not_block_plot(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_success(service)
     assert service.plot_state.phase is PlotPhase.SUCCEEDED
     service.shutdown()
 
@@ -207,9 +194,9 @@ def test_cancelled_plot_not_complete_fraction(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_started(service)
     service.request_safe_stop()
-    _wait_for_signal(service.safe_stop_finished)
+    wait_for_safe_stop(service)
     assert service.plot_progress.phase is PlotProgressPhase.CANCELLED
     assert service.plot_progress.estimated_fraction != 1.0
     service.shutdown()
@@ -228,6 +215,6 @@ def test_shutdown_stops_progress_timer(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_started(service)
     service.shutdown()
     shutdown_all_plotter_services()

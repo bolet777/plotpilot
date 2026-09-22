@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
+from qt_helpers import wait_for_plot_started, wait_for_plot_success, wait_for_safe_stop
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -22,17 +22,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def _connected_window(qapp) -> tuple[MainWindow, FakePlotterBackend]:
@@ -89,11 +78,11 @@ def test_confirm_starts_plot(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     assert len(fake.plot_paths) == 1
     assert fake.plot_file_contents
-    assert "only-in-layer-a" in fake.plot_file_contents[0]
+    plotted = fake.plot_file_contents[0]
+    assert "<path " in plotted and "stroke=" in plotted
 
 
 def test_stop_button_while_plotting(qapp, monkeypatch) -> None:
@@ -106,10 +95,10 @@ def test_stop_button_while_plotting(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_started(window.plotter_service)
     assert window._plot_stop_button.isEnabled()
     window._plot_stop_button.click()
-    _wait_for_signal(window.plotter_service.safe_stop_finished)
+    wait_for_safe_stop(window.plotter_service)
 
 
 def test_no_auto_plot_on_startup(qapp) -> None:

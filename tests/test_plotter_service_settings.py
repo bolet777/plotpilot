@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plot_job import PlotPhase
@@ -16,6 +15,7 @@ from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import load_svg_from_path
+from qt_helpers import wait_for_plot_started, wait_for_plot_success
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -26,17 +26,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def test_plot_passes_settings_snapshot(qapp) -> None:
@@ -50,8 +39,7 @@ def test_plot_passes_settings_snapshot(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     assert service.start_plot_layer(document, layers[0]) is None
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_success(service)
     assert service.plot_state.phase is PlotPhase.SUCCEEDED
     assert fake.plot_settings_used == [PlotSettings(pen_down_speed=15, model=2)]
 
@@ -67,8 +55,7 @@ def test_plot_passes_path_reordering_snapshot(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     assert service.start_plot_layer(document, layers[0]) is None
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_success(service)
     assert fake.plot_settings_used == [PlotSettings(path_reordering=1)]
 
 
@@ -84,7 +71,7 @@ def test_changing_settings_during_plot_does_not_alter_snapshot(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_started(service)
     settings.replace(PlotSettings(path_reordering=None))
     assert fake.plot_settings_used == [PlotSettings(path_reordering=1)]
     service.cancel_plot()

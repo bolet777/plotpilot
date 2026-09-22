@@ -20,7 +20,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
-_THREAD_POOL_DRAIN_SECONDS = 0.35
+_THREAD_POOL_DRAIN_SECONDS = 0.2
+_PLOT_EXIT_WAIT_SECONDS_TEST = 0.5
 _TEST_AUTO_DETECT_INTERVAL_MS = 25
 _TEST_AUTO_DETECT_RESUME_DELAY_MS = 15
 
@@ -77,7 +78,7 @@ def _drain_qt_runtime(*, full: bool = False) -> None:
             break
         if application is not None:
             application.processEvents()
-        pool.waitForDone(10)
+        pool.waitForDone(1)
 
     if application is not None:
         application.processEvents()
@@ -93,7 +94,10 @@ def qapp():
 
 @pytest.fixture(autouse=True)
 def _fast_plot_exit_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("plotpilot.services.plotter_service.PLOT_EXIT_WAIT_SECONDS", 3.0)
+    monkeypatch.setattr(
+        "plotpilot.services.plotter_service.PLOT_EXIT_WAIT_SECONDS",
+        _PLOT_EXIT_WAIT_SECONDS_TEST,
+    )
 
 
 @pytest.fixture(autouse=True)
