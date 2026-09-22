@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
+from qt_helpers import wait_until
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -22,17 +22,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 3000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def test_startup_disconnected_pen_disabled(qapp) -> None:
@@ -53,7 +42,7 @@ def test_refresh_updates_ui(qapp) -> None:
     )
     window = MainWindow(plotter_backend=fake)
     window.plotter_service.refresh()
-    _wait_for_signal(window.plotter_service.status_changed)
+    wait_until(lambda: window._pen_up_button.isEnabled())
     assert window._pen_up_button.isEnabled()
     assert window._pen_down_button.isEnabled()
     assert "Connected" in window._plotter_status_label.text()
@@ -76,5 +65,5 @@ def test_pen_up_from_ui(qapp) -> None:
     window.plotter_service._status = fake.detect_result  # noqa: SLF001
     window._apply_plotter_status(fake.detect_result)
     window._pen_up_button.click()
-    _wait_for_signal(window.plotter_service.status_changed)
+    wait_until(lambda: fake.pen_up_calls >= 1)
     assert fake.pen_up_calls == 1

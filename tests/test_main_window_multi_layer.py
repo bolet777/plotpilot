@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState
@@ -14,6 +14,7 @@ from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
+from qt_helpers import wait_for_plot_success, wait_until
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -26,34 +27,8 @@ def qapp():
     yield application
 
 
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
-
-
 def _wait_for_job_state(service: MultiLayerPlotService, state: MultiLayerJobState) -> None:
-    if service.job.state is state:
-        return
-
-    def _check(_job: object) -> None:
-        if service.job.state is state:
-            loop.quit()
-
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    service.job_changed.connect(_check)
-    timer.start(5000)
-    loop.exec()
-    timer.stop()
-    service.job_changed.disconnect(_check)
+    wait_until(lambda: service.job.state is state, timeout_ms=5000)
     assert service.job.state is state
 
 
@@ -120,13 +95,11 @@ def test_multi_plot_flow(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_checked_layers()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     _wait_for_job_state(window.multi_layer_service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     assert len(fake.plot_paths) == 1
     window._on_multi_continue()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     _wait_for_job_state(window.multi_layer_service, MultiLayerJobState.COMPLETED)
     assert len(fake.plot_paths) == 2
 
@@ -139,8 +112,7 @@ def test_single_layer_plot_still_works(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_selected_layer()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     assert len(fake.plot_paths) == 1
 
 
@@ -154,8 +126,7 @@ def test_checkboxes_disabled_during_job(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
     window._on_plot_checked_layers()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
+    wait_for_plot_success(window.plotter_service)
     _wait_for_job_state(window.multi_layer_service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     item = window._layers_list.item(0)
     assert item is not None
@@ -163,19 +134,26 @@ def test_checkboxes_disabled_during_job(qapp, monkeypatch) -> None:
 
 
 def test_synthetic_document_layer(qapp, monkeypatch) -> None:
+    """Synthetic single-layer doc: viewport prep may reject tiny px-only art (no modal hang)."""
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok")
     )
     window = MainWindow(plotter_backend=fake)
     window.plotter_service._status = fake.detect_result  # noqa: SLF001
+    window._apply_plotter_status(fake.detect_result)
     window.set_document(load_svg_from_path(FIXTURES / "no_groups.svg"))
     _check_row(window, 0)
+    warnings: list[str] = []
     monkeypatch.setattr(
         QMessageBox,
         "question",
         lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
     )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(str(args[2]) if len(args) > 2 else ""),
+    )
     window._on_plot_checked_layers()
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    _wait_for_signal(window.plotter_service.plot_state_changed)
-    assert len(fake.plot_paths) == 1
+    assert fake.plot_paths == []
+    assert any("intersects" in message.lower() for message in warnings)

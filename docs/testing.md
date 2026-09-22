@@ -2,39 +2,62 @@
 
 PlotPilot uses [pytest](https://docs.pytest.org/) via `uv`.
 
-## Commands
+## Developer loops
 
-**Fast development** (no slow integration, no hardware):
-
-```bash
-uv run pytest -m "not slow" -q
-```
-
-**Normal automated suite** (includes slow integration, still no hardware):
+**While coding** (single file or test):
 
 ```bash
-uv run pytest -q
+uv run pytest tests/test_whatever.py -q
 ```
 
-**Slow integration only**:
+**Pre-commit / normal fast loop** (no slow integration, no hardware):
+
+```bash
+./scripts/test_fast.sh
+# equivalent:
+uv run pytest -m "not slow and not hardware" -q
+```
+
+**Full software validation** (includes slow integration, still no hardware):
+
+```bash
+uv run pytest -m "not hardware" -q
+```
+
+**Slow integration only** (auto-detect polling, longer async chains):
 
 ```bash
 uv run pytest -m slow -q
 ```
 
-**Physical AxiDraw** (explicit opt-in — may touch the machine; passive probe only in repo today):
+**Physical AxiDraw** (explicit opt-in):
 
 ```bash
 uv run pytest -m hardware -v
 ```
 
-Hardware tests are excluded by default (`addopts` in `pyproject.toml` and collection skips). They skip cleanly when `axicli` or a plotter is unavailable.
+Hardware tests are excluded by default (`addopts` in `pyproject.toml` and collection skips).
+
+## Expected suite timing (local dev machine, order of magnitude)
+
+| Suite | Target |
+|-------|--------|
+| Pure models / SVG (no Qt workers) | &lt; 1 s |
+| Fast suite (`not slow`, `not hardware`) | &lt; 30 s (goal &lt; 15 s) |
+| Full non-hardware | &lt; 60 s when feasible |
+
+Regressions: if the fast suite suddenly takes minutes, check for accidental `QMessageBox` modals in tests, missed Qt signal waits, or real `axicli`/hardware use.
 
 ## Safety
 
 - Default `uv run pytest` uses `FakePlotterBackend` or mocked subprocess runners — not your AxiDraw.
 - Tests run headless (`QT_QPA_PLATFORM=offscreen` in `tests/conftest.py`).
 - Opening SVG in tests uses an injected `svg_file_chooser` — no modal `QFileDialog`.
+- Patch `QMessageBox.warning` when testing UI paths that surface errors; offscreen modals block forever.
+
+## Qt async tests
+
+Prefer `tests/qt_helpers.py` (`wait_until`, `wait_for_plot_success`, …) over ad-hoc `QEventLoop` + 5 s timers. Connect or poll **before** assuming a signal was missed — do not burn multi-second timeouts on every plot test.
 
 ## Fixtures
 

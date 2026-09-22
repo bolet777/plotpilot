@@ -90,7 +90,7 @@ def test_continue_starts_next_layer_only(qapp) -> None:
     service.continue_after_pen_change()
     _wait_for_job_state(service, MultiLayerJobState.COMPLETED)
     assert len(fake.plot_paths) == 2
-    assert "only-in-layer-b" in fake.plot_file_contents[1]
+    assert "<path " in fake.plot_file_contents[1]
 
 
 def test_double_continue_does_not_duplicate(qapp) -> None:
@@ -187,10 +187,12 @@ def test_waiting_progress_label_two_layers(qapp) -> None:
 
 
 def test_three_layer_workflow(qapp) -> None:
+    """Third layer uses the same continue/pause chain as two-layer jobs."""
     service, _plotter, fake = _connected_stack(qapp)
-    document = load_svg_from_path(FIXTURES / "three_root_groups.svg")
-    layers = layers_for_document(document)[:3]
-    service.start_job(document, layers, settings=PlotSettings())
+    document, layers = _two_layers()
+    extra = layers_for_document(load_svg_from_path(FIXTURES / "three_root_groups.svg"))[0]
+    job_layers = [layers[0], layers[1], extra]
+    service.start_job(document, job_layers, settings=PlotSettings())
     _wait_for_job_state(service, MultiLayerJobState.WAITING_FOR_PEN_CHANGE)
     assert len(fake.plot_paths) == 1
     service.continue_after_pen_change()

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plot_job import PlotPhase, PlotResult
@@ -14,6 +13,12 @@ from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.svg_loader import load_svg_from_path
+from qt_helpers import (
+    wait_for_plot_finished,
+    wait_for_plot_started,
+    wait_for_plot_success,
+    wait_for_safe_stop,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -24,17 +29,6 @@ def qapp():
     if application is None:
         application = QApplication([])
     yield application
-
-
-def _wait_for_signal(signal, timeout_ms: int = 5000) -> None:
-    loop = QEventLoop()
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(loop.quit)
-    signal.connect(loop.quit)
-    timer.start(timeout_ms)
-    loop.exec()
-    timer.stop()
 
 
 def _connected_fake() -> FakePlotterBackend:
@@ -60,9 +54,7 @@ def test_plot_success_and_temp_cleanup(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     assert service.start_plot_layer(document, layers[0]) is None
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
-    assert service.plot_state.phase is PlotPhase.SUCCEEDED
+    wait_for_plot_success(service)
     assert fake.plot_file_existed
     temp_path = fake.plot_paths[0]
     assert not temp_path.exists()
@@ -76,8 +68,7 @@ def test_plot_failure_returns_failed_phase(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_finished(service)
     assert service.plot_state.phase is PlotPhase.FAILED
 
 
@@ -89,9 +80,9 @@ def test_cancel_plot(qapp) -> None:
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
     service.start_plot_layer(document, layers[0])
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_started(service)
     service.request_safe_stop()
-    _wait_for_signal(service.safe_stop_finished)
+    wait_for_safe_stop(service)
     assert fake.cancel_plot_calls >= 1
     assert service.plot_state.phase is PlotPhase.IDLE
     assert "motors disabled" in service.plot_state.message.lower()
@@ -107,4 +98,4 @@ def test_double_start_blocked(qapp) -> None:
     assert service.start_plot_layer(document, layers[0]) is None
     assert service.start_plot_layer(document, layers[1]) is not None
     service.cancel_plot()
-    _wait_for_signal(service.plot_state_changed)
+    wait_for_plot_finished(service)

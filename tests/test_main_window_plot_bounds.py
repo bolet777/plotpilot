@@ -12,6 +12,7 @@ from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatu
 from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
+from qt_helpers import wait_for_plot_success
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -67,7 +68,8 @@ def test_oversize_shows_status_but_allows_plot_start(qapp, tmp_path: Path) -> No
     assert window._plot_layer_button.isEnabled()
 
 
-def test_oversize_does_not_call_backend(qapp, tmp_path: Path) -> None:
+def test_oversize_small_geometry_still_plots(qapp, tmp_path: Path) -> None:
+    """Oversize canvas warns in UI, but tiny geometry can still reach the backend."""
     oversize = tmp_path / "big.svg"
     oversize.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="500mm" height="500mm">'
@@ -81,8 +83,9 @@ def test_oversize_does_not_call_backend(qapp, tmp_path: Path) -> None:
     layer = window._current_layer()
     assert layer is not None
     error = window.plotter_service.start_plot_layer(document, layer)
-    assert error is not None
-    assert fake.plot_paths == []
+    assert error is None
+    wait_for_plot_success(window.plotter_service)
+    assert len(fake.plot_paths) == 1
 
 
 def test_default_cli_still_allows_plot_when_connected(qapp) -> None:
