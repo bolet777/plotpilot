@@ -29,6 +29,9 @@ specs/NNN-short-name/
 | 008 | [safe-stop-home](008-safe-stop-home/) | Stop → raise pen → home → disable XY |
 | 009 | [root-groups-as-layers](009-root-groups-as-layers/) | Fallback layers from root `<g>` groups |
 | 010 | [macos-app-bundle](010-macos-app-bundle/) | PyInstaller `PlotPilot.app`, `lance.sh`, icons |
+| 013 | [plotter-model-and-bounds](013-plotter-model-and-bounds/) | Model travel limits and page preflight |
+| 014 | [plot-progress](014-plot-progress/) | Plot progress and preview estimate |
+| 015 | [viewport-positioning-and-clipping](015-viewport-positioning-and-clipping/) | Position/scale artwork; geometric clip before axicli |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

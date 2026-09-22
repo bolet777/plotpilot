@@ -81,6 +81,34 @@ def preview_work_area_is_ambiguous(plot_settings: PlotSettings) -> bool:
     return plot_settings.model is None
 
 
+@dataclass(frozen=True, slots=True)
+class PlotViewport:
+    """Physical clipping rectangle for plot preparation."""
+
+    width_mm: float
+    height_mm: float
+    label: str
+    hardware_verified: bool
+
+
+def resolve_plot_viewport(
+    plot_settings: PlotSettings,
+    *,
+    fallback: FallbackWorkArea = FallbackWorkArea.A4,
+) -> PlotViewport:
+    """Machine viewport for geometric clipping (explicit model or user fallback)."""
+    preview = resolve_preview_work_area(plot_settings, fallback=fallback)
+    if preview is None:
+        msg = "Could not resolve plot viewport."
+        raise ValueError(msg)
+    return PlotViewport(
+        width_mm=preview.width_mm,
+        height_mm=preview.height_mm,
+        label=preview.label,
+        hardware_verified=not preview.from_fallback,
+    )
+
+
 def compute_physical_preview_layout(
     svg_width_mm: float,
     svg_height_mm: float,

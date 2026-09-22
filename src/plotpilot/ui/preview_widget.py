@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QResizeEvent
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QResizeEvent
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.services.preview_work_area import (
     PhysicalPreviewLayout,
     PreviewWorkArea,
     compute_physical_preview_layout,
-    mm_rect_to_px,
 )
 
 
@@ -63,15 +63,21 @@ class LayerPreviewWidget(QWidget):
     """Neutral canvas with centered, aspect-preserving SVG render."""
 
     _PREVIEW_MARGIN_PX = 12.0
+    artwork_transform_changed = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(200, 200)
+        self.setMouseTracking(True)
         self._renderer = QSvgRenderer(self)
         self._message: str | None = "Open an SVG to preview a layer."
         self._last_svg: str | None = None
         self._physical: _PhysicalPreviewState | None = None
+        self._artwork_transform = ArtworkTransform.identity()
+        self._transform_controls_enabled = True
+        self._dragging = False
+        self._drag_last_px: QPointF | None = None
 
     @property
     def last_svg(self) -> str | None:
@@ -108,6 +114,21 @@ class LayerPreviewWidget(QWidget):
         self._message = None
         self.update()
         return True
+
+    @property
+    def artwork_transform(self) -> ArtworkTransform:
+        return self._artwork_transform
+
+    def set_artwork_transform(self, transform: ArtworkTransform) -> None:
+        transform.validate()
+        self._artwork_transform = transform
+        self.update()
+
+    def set_transform_controls_enabled(self, enabled: bool) -> None:
+        self._transform_controls_enabled = enabled
+        if not enabled:
+            self._dragging = False
+            self._drag_last_px = None
 
     def set_work_area_overlay(
         self,
@@ -189,15 +210,76 @@ class LayerPreviewWidget(QWidget):
         if target.width() > 0 and target.height() > 0:
             self._renderer.render(painter, target)
 
-    def _paint_physical_preview(self, painter: QPainter, layout: PhysicalPreviewLayout) -> None:
-        sx, sy, sw, sh = mm_rect_to_px(layout, layout.svg_rect_mm)
-        svg_target = QRectF(sx, sy, sw, sh)
-        if sw > 0 and sh > 0:
-            painter.fillRect(svg_target, QColor("#ffffff"))
-            self._renderer.render(painter, svg_target)
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            not self._transform_controls_enabled
+            or self._message is not None
+            or event.button() != Qt.MouseButton.LeftButton
+        ):
+            super().mousePressEvent(event)
+            return
+        layout = self._current_physical_layout()
+        if layout is None:
+            super().mousePressEvent(event)
+            return
+        self._dragging = True
+        self._drag_last_px = event.position()
+        event.accept()
 
-        wx, wy, ww, wh = mm_rect_to_px(layout, layout.work_area_rect_mm)
-        work_target = QRectF(wx, wy, ww, wh)
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if not self._dragging or self._drag_last_px is None:
+            super().mouseMoveEvent(event)
+            return
+        layout = self._current_physical_layout()
+        if layout is None or layout.mm_to_px <= 0:
+            super().mouseMoveEvent(event)
+            return
+        delta_px = event.position() - self._drag_last_px
+        self._drag_last_px = event.position()
+        delta_mm = delta_px.x() / layout.mm_to_px, delta_px.y() / layout.mm_to_px
+        current = self._artwork_transform
+        moved = ArtworkTransform(
+            x_mm=current.x_mm + delta_mm,
+            y_mm=current.y_mm + delta_mm,
+            scale=current.scale,
+        )
+        self.set_artwork_transform(moved)
+        self.artwork_transform_changed.emit(moved)
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self._drag_last_px = None
+        super().mouseReleaseEvent(event)
+
+    def _paint_physical_preview(self, painter: QPainter, layout: PhysicalPreviewLayout) -> None:
+        transform = self._artwork_transform
+        scale_px = layout.mm_to_px
+        page_w_px = layout.svg_rect_mm.width_mm * scale_px
+        page_h_px = layout.svg_rect_mm.height_mm * scale_px
+        page_target = QRectF(0.0, 0.0, page_w_px, page_h_px)
+        work_w_px = layout.work_area_rect_mm.width_mm * scale_px
+        work_h_px = layout.work_area_rect_mm.height_mm * scale_px
+        work_target = QRectF(0.0, 0.0, work_w_px, work_h_px)
+
+        painter.save()
+        painter.translate(layout.workspace_x_px, layout.workspace_y_px)
+
+        if page_w_px > 0 and page_h_px > 0:
+            painter.save()
+            painter.translate(transform.x_mm * scale_px, transform.y_mm * scale_px)
+            painter.scale(transform.scale, transform.scale)
+            painter.fillRect(page_target, QColor("#ffffff"))
+            painter.setOpacity(0.35)
+            self._renderer.render(painter, page_target)
+            painter.setOpacity(1.0)
+            if work_w_px > 0 and work_h_px > 0:
+                painter.setClipRect(work_target)
+            self._renderer.render(painter, page_target)
+            painter.restore()
+
+        wx, wy, ww, wh = work_target.x(), work_target.y(), work_target.width(), work_target.height()
         if ww > 0 and wh > 0:
             pen = QPen(QColor("#cc0000"))
             pen.setStyle(Qt.PenStyle.DashLine)
@@ -219,3 +301,4 @@ class LayerPreviewWidget(QWidget):
                     int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
                     label,
                 )
+        painter.restore()

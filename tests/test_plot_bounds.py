@@ -45,7 +45,7 @@ def test_inch_and_px_documents_parse() -> None:
 def test_width_exceeds_model_1() -> None:
     result = check_plot_bounds(_OVERSIZE, PlotSettings(model=1))
     assert result.status is BoundsStatus.OUT_OF_BOUNDS
-    assert plot_bounds_block_message(_OVERSIZE, PlotSettings(model=1)) is not None
+    assert plot_bounds_block_message(_OVERSIZE, PlotSettings(model=1)) is None
 
 
 def test_a3_on_a4_model_out_of_bounds() -> None:

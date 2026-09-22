@@ -13,6 +13,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
+from plotpilot.geometry.plot_viewport import PlotViewportError
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_estimate import PlotEstimate
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
 from plotpilot.models.plot_progress import (
@@ -28,9 +30,10 @@ from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import PLOT_CANCEL_WAIT, AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.bounds_service import plot_bounds_block_message
-from plotpilot.services.plot_service import plot_svg_for_layer, validate_layer_plot_svg
+from plotpilot.services.plot_service import plot_svg_for_layer
+from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
+from plotpilot.services.preview_work_area import FallbackWorkArea
 from plotpilot.services.settings_service import SettingsService
-from plotpilot.svg.plot_dimensions import PlotDimensionError
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +373,8 @@ class PlotterService(QObject):
         layer: SvgLayer,
         *,
         plot_settings: PlotSettings | None = None,
+        artwork_transform: ArtworkTransform | None = None,
+        fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
         layer_index: int | None = None,
         layer_count: int | None = None,
         next_layer_name: str | None = None,
@@ -389,13 +394,21 @@ class PlotterService(QObject):
         if bounds_error is not None:
             return bounds_error
 
-        svg_text = plot_svg_for_layer(document, layer)
+        transform = (
+            artwork_transform if artwork_transform is not None else ArtworkTransform.identity()
+        )
+        layer_svg = plot_svg_for_layer(document, layer)
         try:
-            validate_layer_plot_svg(svg_text)
-        except PlotDimensionError as exc:
+            prepared = prepare_layer_plot_svg(
+                layer_svg,
+                plot_settings=plot_settings,
+                transform=transform,
+                fallback=fallback_work_area,
+            )
+        except PlotViewportError as exc:
             return exc.user_message
 
-        temp_path = _write_temp_svg(svg_text)
+        temp_path = _write_temp_svg(prepared.svg_text)
         self._temp_plot_path = temp_path
         self._active_plot_settings = plot_settings
         self._plot_in_flight = True
