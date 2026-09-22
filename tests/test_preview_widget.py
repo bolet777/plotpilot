@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QByteArray, QRectF
+from PySide6.QtCore import QByteArray, QPoint, QPointF, QRectF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from plotpilot.services.preview_work_area import PreviewWorkArea
 from plotpilot.ui.preview_widget import (
     LayerPreviewWidget,
     fit_rect_preserve_aspect,
     svg_render_source_size,
 )
+
+_PLOT_SVG = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">
+  <line x1="0" y1="50" x2="100" y2="50" stroke="black"/>
+</svg>"""
 
 MINIMAL_SVG = """<?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
@@ -135,6 +143,46 @@ def test_svg_render_source_size_fallback_default_size(qapp) -> None:
     w, h = svg_render_source_size(renderer)
     assert w > 0 and h > 0
     _assert_same_ratio(80, 40, QRectF(0, 0, w, h))
+
+
+def test_drag_updates_artwork_transform_in_mm(qapp) -> None:
+    widget = LayerPreviewWidget()
+    widget.resize(520, 420)
+    widget.show()
+    qapp.processEvents()
+    assert widget.set_preview_svg(_PLOT_SVG) is True
+    widget.set_work_area_overlay(
+        svg_width_mm=100.0,
+        svg_height_mm=100.0,
+        work_area=PreviewWorkArea(
+            width_mm=210.0,
+            height_mm=297.0,
+            label="A4",
+            from_fallback=True,
+        ),
+    )
+    layout = widget.physical_layout
+    assert layout is not None
+    start_x = widget.artwork_transform.x_mm
+    start_y = widget.artwork_transform.y_mm
+    origin = QPoint(260, 210)
+    delta_px = 40
+    QTest.mousePress(widget, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, origin)
+    move_pos = QPoint(origin.x() + delta_px, origin.y())
+    widget.mouseMoveEvent(
+        QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(move_pos),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, move_pos)
+    qapp.processEvents()
+    expected_delta_mm = delta_px / layout.mm_to_px
+    assert widget.artwork_transform.x_mm == pytest.approx(start_x + expected_delta_mm)
+    assert widget.artwork_transform.y_mm == pytest.approx(start_y)
 
 
 def test_resize_triggers_repaint_only(qapp) -> None:

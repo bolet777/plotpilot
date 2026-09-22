@@ -236,11 +236,12 @@ class LayerPreviewWidget(QWidget):
             return
         delta_px = event.position() - self._drag_last_px
         self._drag_last_px = event.position()
-        delta_mm = delta_px.x() / layout.mm_to_px, delta_px.y() / layout.mm_to_px
+        delta_x_mm = delta_px.x() / layout.mm_to_px
+        delta_y_mm = delta_px.y() / layout.mm_to_px
         current = self._artwork_transform
         moved = ArtworkTransform(
-            x_mm=current.x_mm + delta_mm,
-            y_mm=current.y_mm + delta_mm,
+            x_mm=current.x_mm + delta_x_mm,
+            y_mm=current.y_mm + delta_y_mm,
             scale=current.scale,
         )
         self.set_artwork_transform(moved)

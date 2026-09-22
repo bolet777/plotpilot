@@ -8,5 +8,5 @@
 - [x] T6 plotter_service + multi_layer snapshot + estimate on clipped temp SVG
 - [x] T7 bounds_service policy for clipped plots
 - [x] T8 preview transform, drag, dim; main_window controls
-- [ ] T9 Application tests (preview drag, multi-layer snapshot) — partial; see implementation-notes.md
-- [ ] T10 Full pytest + ruff + PR + merge — deferred; see implementation-notes.md
+- [x] T9 Application tests (preview drag mm, multi-layer transform snapshot, clipped plot + settings)
+- [x] T10 Fast/full pytest + ruff + merge validation — see implementation-notes.md
