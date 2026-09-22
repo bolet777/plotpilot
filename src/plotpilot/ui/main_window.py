@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -36,8 +37,14 @@ from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_service import preview_svg_for_layer
+from plotpilot.services.preview_work_area import (
+    FallbackWorkArea,
+    preview_work_area_is_ambiguous,
+    resolve_preview_work_area,
+)
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
 from plotpilot.ui.plot_progress_labels import (
     progress_fraction_label,
     progress_headline,
@@ -129,6 +136,24 @@ class MainWindow(QMainWindow):
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
 
+        self._fallback_work_area_row = QWidget(central)
+        fallback_row = QHBoxLayout(self._fallback_work_area_row)
+        fallback_row.setContentsMargins(0, 0, 0, 0)
+        fallback_row.addWidget(QLabel("Work area:", self._fallback_work_area_row))
+        self._fallback_work_area_combo = QComboBox(self._fallback_work_area_row)
+        for area in (FallbackWorkArea.A4, FallbackWorkArea.A3):
+            self._fallback_work_area_combo.addItem(area.value, area)
+        stored_fallback = self._settings_service.preview_fallback_work_area
+        fallback_index = self._fallback_work_area_combo.findData(stored_fallback)
+        if fallback_index >= 0:
+            self._fallback_work_area_combo.setCurrentIndex(fallback_index)
+        self._fallback_work_area_combo.currentIndexChanged.connect(
+            self._on_fallback_work_area_changed,
+        )
+        fallback_row.addWidget(self._fallback_work_area_combo)
+        fallback_row.addStretch(1)
+        preview_column.addWidget(self._fallback_work_area_row)
+
         self._preview_stack = QStackedWidget(central)
         self._preview_empty_page = QWidget(central)
         empty_layout = QVBoxLayout(self._preview_empty_page)
@@ -214,7 +239,7 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(plotter_buttons)
 
         self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
-        self._plot_settings.user_changed.connect(self._refresh_bounds_status)
+        self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
         root_layout.addWidget(self._plot_settings)
 
         self._bounds_status_label = QLabel("", central)
@@ -269,6 +294,8 @@ class MainWindow(QMainWindow):
         self._apply_plot_progress(self._plotter_service.plot_progress)
         self._apply_multi_layer_job(self._multi_layer_service.job)
         self._refresh_bounds_status()
+        self._sync_fallback_work_area_visibility()
+        self._refresh_preview_work_area()
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
 
@@ -648,6 +675,7 @@ class MainWindow(QMainWindow):
         layer = self._layers[row]
         svg_text = preview_svg_for_layer(self._document, layer)
         self._preview.set_preview_svg(svg_text)
+        self._refresh_preview_work_area()
 
     def set_document(self, document: SvgDocument) -> None:
         """Replace the active document and layer list (used after successful load)."""
@@ -655,12 +683,58 @@ class MainWindow(QMainWindow):
         self._refresh_bounds_status()
         self._update_plot_controls()
 
+    def _on_plot_settings_changed(self) -> None:
+        self._sync_fallback_work_area_visibility()
+        self._refresh_bounds_status()
+        self._refresh_preview_work_area()
+
+    def _on_fallback_work_area_changed(self, _index: int) -> None:
+        area = self._fallback_work_area_combo.currentData()
+        if not isinstance(area, FallbackWorkArea):
+            return
+        self._settings_service.set_preview_fallback_work_area(area)
+        self._refresh_preview_work_area()
+
+    def _sync_fallback_work_area_visibility(self) -> None:
+        show = preview_work_area_is_ambiguous(self._settings_service.plot_settings)
+        self._fallback_work_area_row.setVisible(show)
+
+    def _refresh_preview_work_area(self) -> None:
+        if self._preview.message is not None or self._preview.last_svg is None:
+            self._preview.set_work_area_overlay(
+                svg_width_mm=0.0,
+                svg_height_mm=0.0,
+                work_area=None,
+            )
+            return
+
+        work_area = resolve_preview_work_area(
+            self._settings_service.plot_settings,
+            fallback=self._settings_service.preview_fallback_work_area,
+        )
+        try:
+            physical = parse_physical_size(self._preview.last_svg)
+        except PlotDimensionError:
+            self._preview.set_work_area_overlay(
+                svg_width_mm=0.0,
+                svg_height_mm=0.0,
+                work_area=None,
+            )
+            return
+
+        self._preview.set_work_area_overlay(
+            svg_width_mm=physical.width_mm,
+            svg_height_mm=physical.height_mm,
+            work_area=work_area,
+        )
+
     def _refresh_bounds_status(self) -> None:
         document = self._document
         if document is None:
             self._bounds_check = None
             self._bounds_status_label.setText("")
             self._bounds_status_label.setStyleSheet("")
+            self._refresh_preview_work_area()
             return
 
         self._bounds_check = check_plot_bounds(

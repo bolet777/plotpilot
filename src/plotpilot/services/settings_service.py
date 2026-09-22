@@ -5,10 +5,12 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QSettings, Signal
 
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
+from plotpilot.services.preview_work_area import FallbackWorkArea
 
 ORGANIZATION = "PlotPilot"
 APPLICATION = "PlotPilot"
 
+_KEY_PREVIEW_FALLBACK = "preview/fallback_work_area"
 _KEY_PEN_DOWN = "plot/pen_down_speed"
 _KEY_PEN_UP = "plot/pen_up_speed"
 _KEY_ACCEL = "plot/acceleration"
@@ -37,6 +39,14 @@ class SettingsService(QObject):
     @property
     def plot_settings(self) -> PlotSettings:
         return self._current
+
+    @property
+    def preview_fallback_work_area(self) -> FallbackWorkArea:
+        return self._load_fallback_work_area()
+
+    def set_preview_fallback_work_area(self, value: FallbackWorkArea) -> None:
+        self._settings.setValue(_KEY_PREVIEW_FALLBACK, value.value)
+        self._settings.sync()
 
     def replace(self, settings: PlotSettings) -> None:
         settings.validate()
@@ -86,6 +96,14 @@ class SettingsService(QObject):
         _write_optional_int(self._settings, _KEY_MODEL, settings.model)
         _write_optional_int(self._settings, _KEY_PATH_REORDERING, settings.path_reordering)
         self._settings.sync()
+
+    def _load_fallback_work_area(self) -> FallbackWorkArea:
+        if not self._settings.contains(_KEY_PREVIEW_FALLBACK):
+            return FallbackWorkArea.A4
+        raw = self._settings.value(_KEY_PREVIEW_FALLBACK)
+        if raw == FallbackWorkArea.A3.value:
+            return FallbackWorkArea.A3
+        return FallbackWorkArea.A4
 
 
 def _read_optional_int(store: QSettings, key: str) -> int | None:

@@ -90,3 +90,31 @@ def test_default_cli_still_allows_plot_when_connected(qapp) -> None:
     window._refresh_bounds_status()
     assert "Default (CLI)" in window._bounds_status_label.text()
     assert window._plot_layer_button.isEnabled()
+
+
+def test_fallback_work_area_selector_visible_for_default_cli(qapp) -> None:
+    window, _fake = _connected_window(qapp)
+    window._settings_service.reset_plot_settings()
+    window._sync_fallback_work_area_visibility()
+    assert not window._fallback_work_area_row.isHidden()
+
+
+def test_fallback_work_area_selector_hidden_for_explicit_model(qapp) -> None:
+    window, _fake = _connected_window(qapp)
+    window._settings_service.replace(PlotSettings(model=1))
+    window._sync_fallback_work_area_visibility()
+    assert window._fallback_work_area_row.isHidden()
+
+
+def test_explicit_model_sets_preview_physical_layout(qapp, tmp_path: Path) -> None:
+    svg_path = tmp_path / "a4.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="297mm">'
+        '<path d="M0 0"/></svg>',
+        encoding="utf-8",
+    )
+    window, _fake = _connected_window(qapp)
+    window.set_document(load_svg_from_path(svg_path))
+    window._settings_service.replace(PlotSettings(model=1))
+    window._refresh_preview_work_area()
+    assert window._preview.physical_layout is not None
