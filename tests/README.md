@@ -19,6 +19,7 @@ display, attached AxiDraw, or `axicli` on `PATH`.
 | SVG parse / load | `test_svg_parse.py`, `test_svg_loader.py` |
 | Layers / preview SVG | `test_svg_layers.py`, `test_svg_preview.py` |
 | Plot SVG prep / dimensions | `test_plot_service.py`, `test_plot_dimensions.py` |
+| Viewport / clip (015) | `test_geometry_clipping.py`, `test_artwork_transform.py`, `test_positioned_plot.py`, `test_preview_work_area.py` |
 | Plot settings | `test_plot_settings.py`, `test_settings_service.py` |
 | Plotter backend / argv | `test_plotter_backend.py`, `test_plotter_backend_plot_argv.py` |
 | PlotterService | `test_plotter_service.py`, `test_plotter_service_plot.py`, `test_plotter_auto_detect.py`, `test_safe_stop.py` |
@@ -45,3 +46,12 @@ Run a subset:
 ```bash
 uv run pytest tests/test_svg_layers.py -q
 ```
+
+**Slice 015 (viewport clipping)** — prefer targeted tests during development (fast, no hardware):
+
+```bash
+uv run pytest tests/test_geometry_clipping.py tests/test_artwork_transform.py \
+  tests/test_positioned_plot.py tests/test_plot_bounds.py tests/test_preview_work_area.py -q
+```
+
+Details and merge checklist: [specs/015-viewport-positioning-and-clipping/implementation-notes.md](../specs/015-viewport-positioning-and-clipping/implementation-notes.md).

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
 
 
@@ -37,6 +38,8 @@ class MultiLayerPlotJob:
     current_index: int
     state: MultiLayerJobState
     settings: PlotSettings
+    artwork_transform: ArtworkTransform = ArtworkTransform()
+    fallback_work_area: str = "A4"
     completed_count: int = 0
     message: str = ""
     error_detail: str = ""

@@ -26,4 +26,4 @@ class PlotBoundsCheck:
 
     @property
     def blocks_plotting(self) -> bool:
-        return self.status is BoundsStatus.OUT_OF_BOUNDS
+        return self.status is BoundsStatus.INVALID_DIMENSIONS

@@ -118,8 +118,9 @@ def check_plot_bounds(
 def plot_bounds_block_message(svg_text: str, plot_settings: PlotSettings) -> str | None:
     """Return a user message when plotting must be blocked, or None if allowed."""
     result = check_plot_bounds(svg_text, plot_settings)
-    if result.status is BoundsStatus.OUT_OF_BOUNDS:
+    if result.status is BoundsStatus.INVALID_DIMENSIONS:
         return result.message
+    # Page size may exceed the model; viewport clipping trims geometry at plot time.
     return None
 
 

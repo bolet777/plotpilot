@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -23,6 +24,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from plotpilot.models.artwork_transform import (
+    DEFAULT_SCALE_MAX,
+    DEFAULT_SCALE_MIN,
+    ArtworkTransform,
+    scale_percent,
+    transform_from_scale_percent,
+)
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -154,6 +162,42 @@ class MainWindow(QMainWindow):
         fallback_row.addStretch(1)
         preview_column.addWidget(self._fallback_work_area_row)
 
+        self._position_row = QWidget(central)
+        position_layout = QHBoxLayout(self._position_row)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        position_layout.addWidget(QLabel("Position", self._position_row))
+        position_layout.addWidget(QLabel("X:", self._position_row))
+        self._artwork_x_spin = QDoubleSpinBox(self._position_row)
+        self._artwork_x_spin.setRange(-2000.0, 2000.0)
+        self._artwork_x_spin.setSuffix(" mm")
+        self._artwork_x_spin.setDecimals(1)
+        self._artwork_x_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
+        position_layout.addWidget(self._artwork_x_spin)
+        position_layout.addWidget(QLabel("Y:", self._position_row))
+        self._artwork_y_spin = QDoubleSpinBox(self._position_row)
+        self._artwork_y_spin.setRange(-2000.0, 2000.0)
+        self._artwork_y_spin.setSuffix(" mm")
+        self._artwork_y_spin.setDecimals(1)
+        self._artwork_y_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
+        position_layout.addWidget(self._artwork_y_spin)
+        position_layout.addSpacing(8)
+        position_layout.addWidget(QLabel("Scale:", self._position_row))
+        self._artwork_scale_spin = QDoubleSpinBox(self._position_row)
+        self._artwork_scale_spin.setRange(DEFAULT_SCALE_MIN * 100.0, DEFAULT_SCALE_MAX * 100.0)
+        self._artwork_scale_spin.setSuffix(" %")
+        self._artwork_scale_spin.setDecimals(0)
+        self._artwork_scale_spin.valueChanged.connect(self._on_artwork_scale_spin_changed)
+        position_layout.addWidget(self._artwork_scale_spin)
+        self._artwork_reset_button = QPushButton("Reset", self._position_row)
+        self._artwork_reset_button.clicked.connect(self._on_artwork_reset)
+        position_layout.addWidget(self._artwork_reset_button)
+        position_layout.addStretch(1)
+        preview_column.addWidget(self._position_row)
+
+        self._artwork_status_label = QLabel("", central)
+        self._artwork_status_label.setWordWrap(True)
+        preview_column.addWidget(self._artwork_status_label)
+
         self._preview_stack = QStackedWidget(central)
         self._preview_empty_page = QWidget(central)
         empty_layout = QVBoxLayout(self._preview_empty_page)
@@ -181,8 +225,10 @@ class MainWindow(QMainWindow):
         empty_layout.addStretch(1)
 
         self._preview = LayerPreviewWidget(central)
+        self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
         self._preview_stack.addWidget(self._preview_empty_page)
         self._preview_stack.addWidget(self._preview)
+        self._sync_artwork_controls_from_preview()
         preview_column.addWidget(self._preview_stack, stretch=1)
 
         preview_column_host = QWidget(central)
@@ -485,6 +531,9 @@ class MainWindow(QMainWindow):
         self._pen_down_button.setEnabled(pen_ok)
         settings_locked = plot_active or job_active
         self._plot_settings.set_plotting_active(settings_locked)
+        transform_locked = plot_active or job_active
+        self._preview.set_transform_controls_enabled(not transform_locked)
+        self._position_row.setEnabled(not transform_locked)
         self._open_svg_action.setEnabled(not job_active)
         allow_preview = job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE
         self._layers_list.setEnabled(not job_active or allow_preview)
@@ -547,7 +596,13 @@ class MainWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Ok:
             return
 
-        error = self._plotter_service.start_plot_layer(document, layer)
+        error = self._plotter_service.start_plot_layer(
+            document,
+            layer,
+            plot_settings=self._settings_service.plot_settings,
+            artwork_transform=self._preview.artwork_transform,
+            fallback_work_area=self._settings_service.preview_fallback_work_area,
+        )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
             self._update_plot_controls()
@@ -579,7 +634,13 @@ class MainWindow(QMainWindow):
             return
 
         settings = self._settings_service.plot_settings
-        error = self._multi_layer_service.start_job(document, layers, settings=settings)
+        error = self._multi_layer_service.start_job(
+            document,
+            layers,
+            settings=settings,
+            artwork_transform=self._preview.artwork_transform,
+            fallback_work_area=self._settings_service.preview_fallback_work_area,
+        )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
         self._update_plot_controls()
@@ -624,6 +685,7 @@ class MainWindow(QMainWindow):
         self._open_svg_persistent_button.setVisible(has_document)
 
     def _apply_document(self, document: SvgDocument) -> None:
+        self._set_artwork_transform(ArtworkTransform.identity())
         self._document = document
         self._layers = layers_for_document(document)
         self._status_label.setText(document.name)
@@ -727,6 +789,68 @@ class MainWindow(QMainWindow):
             svg_height_mm=physical.height_mm,
             work_area=work_area,
         )
+        self._refresh_artwork_status()
+
+    def _refresh_artwork_status(self) -> None:
+        transform = self._preview.artwork_transform
+        work_area = resolve_preview_work_area(
+            self._settings_service.plot_settings,
+            fallback=self._settings_service.preview_fallback_work_area,
+        )
+        if work_area is None:
+            self._artwork_status_label.setText("")
+            return
+        lines = [
+            f"Artwork — X: {transform.x_mm:.1f} mm, Y: {transform.y_mm:.1f} mm, "
+            f"Scale: {scale_percent(transform):.0f}%",
+            f"Plot area: {work_area.label}",
+        ]
+        if work_area.from_fallback:
+            lines.append("User-defined work area (not verified hardware).")
+        self._artwork_status_label.setText("\n".join(lines))
+
+    def _sync_artwork_controls_from_preview(self) -> None:
+        transform = self._preview.artwork_transform
+        for spin, value in (
+            (self._artwork_x_spin, transform.x_mm),
+            (self._artwork_y_spin, transform.y_mm),
+            (self._artwork_scale_spin, scale_percent(transform)),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+
+    def _set_artwork_transform(self, transform: ArtworkTransform) -> None:
+        transform.validate()
+        self._preview.set_artwork_transform(transform)
+        self._sync_artwork_controls_from_preview()
+        self._refresh_artwork_status()
+
+    def _on_preview_artwork_dragged(self, transform: object) -> None:
+        if isinstance(transform, ArtworkTransform):
+            self._sync_artwork_controls_from_preview()
+            self._refresh_artwork_status()
+
+    def _on_artwork_position_spin_changed(self, _value: float) -> None:
+        moved = ArtworkTransform(
+            x_mm=self._artwork_x_spin.value(),
+            y_mm=self._artwork_y_spin.value(),
+            scale=self._preview.artwork_transform.scale,
+        )
+        self._set_artwork_transform(moved)
+
+    def _on_artwork_scale_spin_changed(self, value: float) -> None:
+        current = self._preview.artwork_transform
+        try:
+            scaled = transform_from_scale_percent(current, value)
+        except ValueError:
+            return
+        self._set_artwork_transform(
+            ArtworkTransform(x_mm=current.x_mm, y_mm=current.y_mm, scale=scaled.scale),
+        )
+
+    def _on_artwork_reset(self) -> None:
+        self._set_artwork_transform(ArtworkTransform.identity())
 
     def _refresh_bounds_status(self) -> None:
         document = self._document

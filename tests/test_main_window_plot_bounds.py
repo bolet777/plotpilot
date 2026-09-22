@@ -52,25 +52,26 @@ def test_bounds_status_updates_after_model_change(qapp) -> None:
     assert "AxiDraw V3/A3" in window._bounds_status_label.text()
 
 
-def test_oversize_blocks_plot_button(qapp, tmp_path: Path) -> None:
+def test_oversize_shows_status_but_allows_plot_start(qapp, tmp_path: Path) -> None:
     oversize = tmp_path / "big.svg"
     oversize.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="500mm" height="500mm">'
-        '<path d="M0 0"/></svg>',
+        '<line x1="0" y1="0" x2="10" y2="0" stroke="black"/></svg>',
         encoding="utf-8",
     )
     window, fake = _connected_window(qapp, svg_name="preview_two_layers.svg")
     window.set_document(load_svg_from_path(oversize))
     window._settings_service.replace(PlotSettings(model=1))
     window._refresh_bounds_status()
-    assert not window._plot_layer_button.isEnabled()
+    assert "exceeds" in window._bounds_status_label.text().lower()
+    assert window._plot_layer_button.isEnabled()
 
 
 def test_oversize_does_not_call_backend(qapp, tmp_path: Path) -> None:
     oversize = tmp_path / "big.svg"
     oversize.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="500mm" height="500mm">'
-        '<path d="M0 0"/></svg>',
+        '<line x1="0" y1="0" x2="10" y2="0" stroke="black"/></svg>',
         encoding="utf-8",
     )
     window, fake = _connected_window(qapp)

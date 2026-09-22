@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.multi_layer_job import (
     MultiLayerJobLayer,
     MultiLayerJobState,
@@ -21,6 +22,7 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.bounds_service import plot_bounds_block_message
 from plotpilot.services.plotter_service import PlotterService
+from plotpilot.services.preview_work_area import FallbackWorkArea
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,8 @@ class MultiLayerPlotService(QObject):
         layers: list[SvgLayer],
         *,
         settings: PlotSettings,
+        artwork_transform: ArtworkTransform | None = None,
+        fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
     ) -> str | None:
         """Begin plotting the first layer. Returns an error message or None if started."""
         if self._job.is_active:
@@ -79,12 +83,15 @@ class MultiLayerPlotService(QObject):
         self._layer_by_id = {layer.layer_id: layer for layer in layers}
         self._continue_in_flight = False
         self._clear_pen_up_wait()
+        transform = artwork_transform or ArtworkTransform.identity()
         self._set_job(
             MultiLayerPlotJob(
                 layers=snapshots,
                 current_index=0,
                 state=MultiLayerJobState.PLOTTING,
                 settings=settings,
+                artwork_transform=transform,
+                fallback_work_area=fallback_work_area.value,
                 completed_count=0,
                 message=snapshots[0].name,
             )
@@ -146,6 +153,8 @@ class MultiLayerPlotService(QObject):
             document,
             svg_layer,
             plot_settings=self._job.settings,
+            artwork_transform=self._job.artwork_transform,
+            fallback_work_area=FallbackWorkArea(self._job.fallback_work_area),
             layer_index=self._job.current_index + 1,
             layer_count=self._job.total_layers,
             next_layer_name=next_layer.name if next_layer is not None else None,
