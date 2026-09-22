@@ -397,19 +397,6 @@ class PlotterService(QObject):
         transform = (
             artwork_transform if artwork_transform is not None else ArtworkTransform.identity()
         )
-        layer_svg = plot_svg_for_layer(document, layer)
-        try:
-            prepared = prepare_layer_plot_svg(
-                layer_svg,
-                plot_settings=plot_settings,
-                transform=transform,
-                fallback=fallback_work_area,
-            )
-        except PlotViewportError as exc:
-            return exc.user_message
-
-        temp_path = _write_temp_svg(prepared.svg_text)
-        self._temp_plot_path = temp_path
         self._active_plot_settings = plot_settings
         self._plot_in_flight = True
         self._pause_auto_detect_for_hardware()
@@ -423,12 +410,23 @@ class PlotterService(QObject):
         self._set_plot_state(
             PlotPhase.RUNNING,
             layer.name,
-            f"Plotting: {layer.name}",
+            f"Preparing: {layer.name}",
         )
 
-        self._start_plot_estimate(temp_path, self._active_plot_settings)
-
         def _run_plot() -> PlotResult:
+            layer_svg = plot_svg_for_layer(document, layer)
+            try:
+                prepared = prepare_layer_plot_svg(
+                    layer_svg,
+                    plot_settings=plot_settings,
+                    transform=transform,
+                    fallback=fallback_work_area,
+                )
+            except PlotViewportError as exc:
+                return PlotResult(success=False, message=exc.user_message)
+            temp_path = _write_temp_svg(prepared.svg_text)
+            self._temp_plot_path = temp_path
+            self._start_plot_estimate(temp_path, plot_settings)
             return self._backend.plot_svg(temp_path, settings=plot_settings)
 
         self._run_async(_run_plot, "plot")

@@ -16,6 +16,8 @@ from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_siz
 
 CURVE_FLATNESS_MM = 0.05
 COORD_TOLERANCE_MM = 0.01
+# svgelements Shape.length() can hang on extreme cubics; cap flattening instead.
+MAX_FLATTEN_STEPS_PER_SEGMENT = 512
 
 _VIEWBOX_RE = re.compile(
     r"viewBox\s*=\s*[\"'](?P<values>[^\"']+)[\"']",
@@ -58,13 +60,14 @@ def prepare_positioned_plot_svg(
     except PlotDimensionError as exc:
         raise PlotViewportError(exc.user_message) from exc
 
+    svg_root = SVG.parse(io.StringIO(svg_text))
     viewbox = _read_viewbox_user(svg_text, page.width_mm, page.height_mm)
-    user_to_mm_scale = _UserToMm(page.width_mm, page.height_mm, viewbox)
+    to_mm = _SvgToMm.from_root(page.width_mm, page.height_mm, viewbox, svg_root)
 
     clip = ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm)
     clipped_paths = _clip_svg_geometry(
-        svg_text,
-        user_to_mm_scale,
+        svg_root,
+        to_mm,
         transform,
         clip,
     )
@@ -85,16 +88,78 @@ def prepare_positioned_plot_svg(
 
 
 @dataclass(frozen=True, slots=True)
-class _UserToMm:
+class _SvgToMm:
+    """Map svgelements segment coordinates to physical millimeters."""
+
     width_mm: float
     height_mm: float
     viewbox: tuple[float, float, float, float]
+    viewport_width_px: float
+    viewport_height_px: float
+    coordinates_in_viewport_pixels: bool
+
+    @classmethod
+    def from_root(
+        cls,
+        width_mm: float,
+        height_mm: float,
+        viewbox: tuple[float, float, float, float],
+        root: SVG,
+    ) -> _SvgToMm:
+        return cls(
+            width_mm=width_mm,
+            height_mm=height_mm,
+            viewbox=viewbox,
+            viewport_width_px=float(root.width) if root.width else 0.0,
+            viewport_height_px=float(root.height) if root.height else 0.0,
+            coordinates_in_viewport_pixels=_coordinates_are_viewport_pixels(root, viewbox),
+        )
 
     def point(self, x: float, y: float) -> tuple[float, float]:
+        """Convert one svgelements segment coordinate pair to mm."""
         vx, vy, vw, vh = self.viewbox
+        if (
+            self.coordinates_in_viewport_pixels
+            and self.viewport_width_px > 0
+            and self.viewport_height_px > 0
+            and vw > 0
+            and vh > 0
+        ):
+            # segments(transformed=True) are in root viewport pixels for viewBox SVGs and
+            # for some viewBox-less exports (e.g. DrawingBot) where coords exceed user width.
+            ux = vx + (x / self.viewport_width_px) * vw
+            uy = vy + (y / self.viewport_height_px) * vh
+        else:
+            ux, uy = x, y
         if vw <= 0 or vh <= 0:
-            return x, y
-        return (x - vx) * self.width_mm / vw, (y - vy) * self.height_mm / vh
+            return ux, uy
+        return (ux - vx) * self.width_mm / vw, (uy - vy) * self.height_mm / vh
+
+
+def _coordinates_are_viewport_pixels(
+    root: SVG,
+    viewbox: tuple[float, float, float, float],
+) -> bool:
+    if root.viewbox is not None:
+        return True
+    _vx, _vy, vw, vh = viewbox
+    if vw <= 0 or vh <= 0:
+        return False
+    max_abs = _max_transformed_coordinate(root)
+    return max_abs > max(vw, vh) * 1.01
+
+
+def _max_transformed_coordinate(root: SVG) -> float:
+    max_abs = 0.0
+    for element in root.elements():
+        if isinstance(element, (SVG, Group)) or not isinstance(element, Shape):
+            continue
+        for segment in element.segments(transformed=True):
+            for point in (getattr(segment, "start", None), getattr(segment, "end", None)):
+                if point is None or not hasattr(point, "x"):
+                    continue
+                max_abs = max(max_abs, abs(point.x), abs(point.y))
+    return max_abs
 
 
 def _read_viewbox_user(
@@ -125,12 +190,11 @@ def _numeric_length(raw: str) -> float:
 
 
 def _clip_svg_geometry(
-    svg_text: str,
-    user_to_mm: _UserToMm,
+    svg: SVG,
+    to_mm: _SvgToMm,
     transform: ArtworkTransform,
     clip: ClipRect,
 ) -> list[list[tuple[float, float]]]:
-    svg = SVG.parse(io.StringIO(svg_text))
     output_paths: list[list[tuple[float, float]]] = []
     current: list[tuple[float, float]] = []
     pen_xy: tuple[float, float] | None = None
@@ -177,7 +241,7 @@ def _clip_svg_geometry(
         for segment in element.segments(transformed=True):
             if isinstance(segment, Move):
                 flush()
-                cursor_mm = user_to_mm.point(segment.end.x, segment.end.y)
+                cursor_mm = to_mm.point(segment.end.x, segment.end.y)
                 subpath_start = cursor_mm
                 continue
 
@@ -188,7 +252,7 @@ def _clip_svg_geometry(
                 cursor_mm = subpath_start
                 continue
 
-            points = _segment_points_mm(segment, user_to_mm)
+            points = _segment_points_mm(segment, to_mm)
             if not points:
                 continue
             if cursor_mm is None:
@@ -210,36 +274,60 @@ def _element_has_stroke(element: Shape) -> bool:
     return value not in {"none", "transparent"}
 
 
-def _segment_points_mm(segment: object, user_to_mm: _UserToMm) -> list[tuple[float, float]]:
+def _segment_points_mm(segment: object, to_mm: _SvgToMm) -> list[tuple[float, float]]:
     if isinstance(segment, Line):
         return [
-            user_to_mm.point(segment.start.x, segment.start.y),
-            user_to_mm.point(segment.end.x, segment.end.y),
+            to_mm.point(segment.start.x, segment.start.y),
+            to_mm.point(segment.end.x, segment.end.y),
         ]
 
-    flatness_user = _flatness_user_units(user_to_mm, CURVE_FLATNESS_MM)
-    length = segment.length()  # type: ignore[attr-defined]
+    flatness_rendered = _flatness_rendered_units(to_mm, CURVE_FLATNESS_MM)
+    length = _estimate_segment_length_rendered(segment)
     if length <= 0:
         pt = segment.end  # type: ignore[attr-defined]
-        return [user_to_mm.point(pt.x, pt.y)]
+        return [to_mm.point(pt.x, pt.y)]
 
-    steps = max(2, int(math.ceil(length / flatness_user)))
+    steps = max(2, int(math.ceil(length / flatness_rendered)))
+    steps = min(steps, MAX_FLATTEN_STEPS_PER_SEGMENT)
     points: list[tuple[float, float]] = []
     for i in range(steps + 1):
         t = i / steps
         pt = segment.point(t)  # type: ignore[attr-defined]
-        points.append(user_to_mm.point(pt.x, pt.y))
+        points.append(to_mm.point(pt.x, pt.y))
     return points
 
 
-def _flatness_user_units(user_to_mm: _UserToMm, flatness_mm: float) -> float:
-    _vx, _vy, vw, vh = user_to_mm.viewbox
-    mm_per_user_x = user_to_mm.width_mm / vw if vw > 0 else 1.0
-    mm_per_user_y = user_to_mm.height_mm / vh if vh > 0 else 1.0
-    mm_per_user = min(abs(mm_per_user_x), abs(mm_per_user_y))
-    if mm_per_user <= 0:
+def _estimate_segment_length_rendered(segment: object) -> float:
+    """Conservative polyline length in svgelements segment coordinates."""
+    if isinstance(segment, Line):
+        return math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y)
+
+    start = segment.start  # type: ignore[attr-defined]
+    end = segment.end  # type: ignore[attr-defined]
+    chain = [start]
+    for name in ("control1", "control2"):
+        control = getattr(segment, name, None)
+        if control is not None:
+            chain.append(control)
+    chain.append(end)
+
+    total = 0.0
+    for a, b in zip(chain, chain[1:], strict=False):
+        total += math.hypot(b.x - a.x, b.y - a.y)
+    return total
+
+
+def _flatness_rendered_units(to_mm: _SvgToMm, flatness_mm: float) -> float:
+    origin = to_mm.point(0.0, 0.0)
+    unit_x = to_mm.point(1.0, 0.0)
+    unit_y = to_mm.point(0.0, 1.0)
+    mm_per_x = abs(unit_x[0] - origin[0])
+    mm_per_y = abs(unit_y[1] - origin[1])
+    scales = [value for value in (mm_per_x, mm_per_y) if value > 0]
+    if not scales:
         return flatness_mm
-    return flatness_mm / mm_per_user
+    mm_per_rendered = min(scales)
+    return flatness_mm / mm_per_rendered
 
 
 def _emit_svg(paths: list[list[tuple[float, float]]], width_mm: float, height_mm: float) -> str:

@@ -70,6 +70,26 @@ def test_disconnected_paths_not_merged() -> None:
     assert prepared.svg_text.count(' d="M ') == 2
 
 
+def test_long_cubic_flattens_without_hanging() -> None:
+    """Regression: svgelements arc length can hang on extreme cubics (spiral bouquet paths)."""
+    d = (
+        "m 1377.69,861.44 c 37.2517,16.43671 45.6966,-5.84401 45.2487,-40.07687 "
+        "12.6937,-86.54104 25.3875,-173.08209 38.0813,-259.62313"
+    )
+    svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 1123 794">
+  <path d="{d}" fill="none" stroke="#111"/>
+</svg>"""
+    prepared = prepare_positioned_plot_svg(
+        svg,
+        viewport_width_mm=420.0,
+        viewport_height_mm=297.0,
+        transform=ArtworkTransform.identity(),
+    )
+    assert prepared.path_count >= 1
+    assert "<path" in prepared.svg_text
+
+
 def test_empty_outside_viewport_raises() -> None:
     svg = """<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm">

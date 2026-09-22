@@ -122,11 +122,15 @@ def test_empty_viewport_intersection_does_not_invoke_backend(qapp) -> None:
     service._status = fake.detect_result  # noqa: SLF001
     document = load_svg_from_path(FIXTURES / "preview_two_layers.svg")
     layers = layers_for_document(document)
-    error = service.start_plot_layer(
-        document,
-        layers[0],
-        artwork_transform=ArtworkTransform(x_mm=10_000.0, y_mm=0.0, scale=1.0),
+    assert (
+        service.start_plot_layer(
+            document,
+            layers[0],
+            artwork_transform=ArtworkTransform(x_mm=10_000.0, y_mm=0.0, scale=1.0),
+        )
+        is None
     )
-    assert error is not None
-    assert "No artwork intersects" in error
+    wait_for_plot_finished(service)
+    assert service.plot_state.phase is PlotPhase.FAILED
+    assert "No artwork intersects" in service.plot_state.message
     assert fake.plot_paths == []
