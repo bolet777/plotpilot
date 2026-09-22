@@ -8,4 +8,4 @@
 - [x] MainWindow menu, save/open, dirty, title
 - [x] Tests: project_file_service, main_window_project
 - [x] Fast + full pytest + ruff
-- [ ] PR merge
+- [x] PR merge
