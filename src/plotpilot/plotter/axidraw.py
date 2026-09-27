@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import signal
@@ -29,6 +30,32 @@ PLOT_CANCEL_WAIT = 8.0
 _INSTALL_HINT = (
     "Install AxiDraw software so axicli is on your PATH (https://axidraw.com/doc/cli_api/)."
 )
+
+
+def cli_search_directories() -> list[Path]:
+    """Locations a Finder-launched .app does not inherit from the shell PATH.
+
+    pipx puts ``axicli`` in ``~/.local/bin``. Terminal launches see that directory;
+    Launch Services does not.
+    """
+    home = Path.home()
+    return [
+        home / ".local" / "bin",
+        home / "Library" / "Application Support" / "pipx" / "venvs" / "axicli" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+    ]
+
+
+def resolve_cli_executable(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in cli_search_directories():
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def _default_runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -61,7 +88,7 @@ class AxiDrawCliBackend:
     def _resolve_cli(self) -> str | None:
         if "/" in self.cli_path or self.cli_path.startswith("."):
             return self.cli_path
-        return shutil.which(self.cli_path)
+        return resolve_cli_executable(self.cli_path)
 
     def _manual(self, command: str) -> subprocess.CompletedProcess[str]:
         cli = self._resolve_cli()
