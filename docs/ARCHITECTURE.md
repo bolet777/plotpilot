@@ -57,7 +57,7 @@ flowchart TB
 
 ### Preview
 
-Layer selection → `preview_svg_for_layer` → `LayerPreviewWidget` renders SVG text.
+Layer selection → `build_prepared_layer_preview` (same pipeline as plot) → `LayerPreviewWidget` renders prepared machine-space SVG; isolated source SVG optional faint context.
 
 ### Single-layer plot
 

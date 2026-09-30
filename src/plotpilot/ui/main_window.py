@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -45,6 +45,7 @@ from plotpilot.services.bounds_service import check_plot_bounds
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
+from plotpilot.services.preview_prepared_service import build_prepared_layer_preview
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
@@ -60,7 +61,6 @@ from plotpilot.services.project_file_service import (
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
-from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
 from plotpilot.ui.plot_progress_labels import (
     progress_fraction_label,
     progress_headline,
@@ -266,6 +266,10 @@ class MainWindow(QMainWindow):
 
         self._preview = LayerPreviewWidget(central)
         self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
+        self._preview_prep_timer = QTimer(self)
+        self._preview_prep_timer.setSingleShot(True)
+        self._preview_prep_timer.setInterval(50)
+        self._preview_prep_timer.timeout.connect(self._refresh_prepared_preview)
         self._preview_stack.addWidget(self._preview_empty_page)
         self._preview_stack.addWidget(self._preview)
         self._sync_artwork_controls_from_preview()
@@ -999,13 +1003,74 @@ class MainWindow(QMainWindow):
         layer = self._layers[row]
         svg_text = preview_svg_for_layer(self._document, layer)
         self._preview.set_preview_svg(svg_text)
-        self._refresh_preview_work_area()
+        self._refresh_prepared_preview()
+
+    def _schedule_prepared_preview_refresh(self) -> None:
+        if self._document is None or not self._layers:
+            return
+        if self._preview.last_svg is None:
+            return
+        self._preview_prep_timer.start()
+
+    def _refresh_prepared_preview(self) -> None:
+        if self._preview.message is not None and self._preview.last_svg is None:
+            self._preview.set_work_area_overlay(
+                svg_width_mm=0.0,
+                svg_height_mm=0.0,
+                work_area=None,
+            )
+            return
+
+        if self._document is None or not self._layers:
+            return
+
+        row = self._layers_list.currentRow()
+        if row < 0 or row >= len(self._layers):
+            return
+
+        layer = self._layers[row]
+        prepared_preview = build_prepared_layer_preview(
+            self._document,
+            layer,
+            plot_settings=self._settings_service.plot_settings,
+            transform=self._preview.artwork_transform,
+            fallback=self._settings_service.preview_fallback_work_area,
+        )
+
+        work_area = resolve_preview_work_area(
+            self._settings_service.plot_settings,
+            fallback=self._settings_service.preview_fallback_work_area,
+        )
+        if (
+            prepared_preview.page_width_mm > 0
+            and prepared_preview.page_height_mm > 0
+            and work_area is not None
+        ):
+            self._preview.set_work_area_overlay(
+                svg_width_mm=prepared_preview.page_width_mm,
+                svg_height_mm=prepared_preview.page_height_mm,
+                work_area=work_area,
+            )
+        else:
+            self._preview.set_work_area_overlay(
+                svg_width_mm=0.0,
+                svg_height_mm=0.0,
+                work_area=None,
+            )
+
+        prepared_svg = prepared_preview.prepared.svg_text if prepared_preview.prepared else None
+        self._preview.set_prepared_plot(
+            prepared_svg=prepared_svg,
+            error_message=prepared_preview.preparation_error,
+            status_lines=prepared_preview.status_lines,
+        )
+        self._refresh_artwork_status()
 
     def _on_plot_settings_changed(self) -> None:
         self._mark_project_dirty()
         self._sync_fallback_work_area_visibility()
         self._refresh_bounds_status()
-        self._refresh_preview_work_area()
+        self._schedule_prepared_preview_refresh()
 
     def _on_fallback_work_area_changed(self, _index: int) -> None:
         area = self._fallback_work_area_combo.currentData()
@@ -1013,7 +1078,7 @@ class MainWindow(QMainWindow):
             return
         self._settings_service.set_preview_fallback_work_area(area)
         self._mark_project_dirty()
-        self._refresh_preview_work_area()
+        self._schedule_prepared_preview_refresh()
 
     def _sync_fallback_work_area_visibility(self) -> None:
         show = preview_work_area_is_ambiguous(self._settings_service.plot_settings)
@@ -1027,27 +1092,7 @@ class MainWindow(QMainWindow):
                 work_area=None,
             )
             return
-
-        work_area = resolve_preview_work_area(
-            self._settings_service.plot_settings,
-            fallback=self._settings_service.preview_fallback_work_area,
-        )
-        try:
-            physical = parse_physical_size(self._preview.last_svg)
-        except PlotDimensionError:
-            self._preview.set_work_area_overlay(
-                svg_width_mm=0.0,
-                svg_height_mm=0.0,
-                work_area=None,
-            )
-            return
-
-        self._preview.set_work_area_overlay(
-            svg_width_mm=physical.width_mm,
-            svg_height_mm=physical.height_mm,
-            work_area=work_area,
-        )
-        self._refresh_artwork_status()
+        self._refresh_prepared_preview()
 
     def _refresh_artwork_status(self) -> None:
         transform = self._preview.artwork_transform
@@ -1065,6 +1110,9 @@ class MainWindow(QMainWindow):
         ]
         if work_area.from_fallback:
             lines.append("User-defined work area (not verified hardware).")
+        for line in self._preview.status_lines:
+            if line not in lines:
+                lines.append(line)
         self._artwork_status_label.setText("\n".join(lines))
 
     def _sync_artwork_controls_from_preview(self) -> None:
@@ -1087,14 +1135,14 @@ class MainWindow(QMainWindow):
         transform.validate()
         self._preview.set_artwork_transform(transform)
         self._sync_artwork_controls_from_preview()
-        self._refresh_artwork_status()
+        self._schedule_prepared_preview_refresh()
         if mark_dirty:
             self._mark_project_dirty()
 
     def _on_preview_artwork_dragged(self, transform: object) -> None:
         if isinstance(transform, ArtworkTransform):
             self._sync_artwork_controls_from_preview()
-            self._refresh_artwork_status()
+            self._schedule_prepared_preview_refresh()
             self._mark_project_dirty()
 
     def _on_artwork_position_spin_changed(self, _value: float) -> None:

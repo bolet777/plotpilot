@@ -1,4 +1,4 @@
-"""Qt widget that renders generated layer preview SVG."""
+"""Qt widget that renders prepared plot geometry matching axicli output."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ class _PhysicalPreviewState:
 
 
 class LayerPreviewWidget(QWidget):
-    """Neutral canvas with centered, aspect-preserving SVG render."""
+    """Machine work area with prepared plot geometry and optional faint source context."""
 
     _PREVIEW_MARGIN_PX = 12.0
     artwork_transform_changed = Signal(object)
@@ -70,9 +70,13 @@ class LayerPreviewWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(200, 200)
         self.setMouseTracking(True)
-        self._renderer = QSvgRenderer(self)
+        self._context_renderer = QSvgRenderer(self)
+        self._prepared_renderer = QSvgRenderer(self)
         self._message: str | None = "Open an SVG to preview a layer."
         self._last_svg: str | None = None
+        self._prepared_svg: str | None = None
+        self._prepared_error: str | None = None
+        self._status_lines: tuple[str, ...] = ()
         self._physical: _PhysicalPreviewState | None = None
         self._artwork_transform = ArtworkTransform.identity()
         self._transform_controls_enabled = True
@@ -84,8 +88,16 @@ class LayerPreviewWidget(QWidget):
         return self._last_svg
 
     @property
+    def prepared_svg(self) -> str | None:
+        return self._prepared_svg
+
+    @property
     def message(self) -> str | None:
         return self._message
+
+    @property
+    def status_lines(self) -> tuple[str, ...]:
+        return self._status_lines
 
     @property
     def physical_layout(self) -> PhysicalPreviewLayout | None:
@@ -93,27 +105,58 @@ class LayerPreviewWidget(QWidget):
         return self._current_physical_layout()
 
     def clear_preview(self, message: str = "Open an SVG to preview a layer.") -> None:
-        self._renderer = QSvgRenderer(self)
+        self._context_renderer = QSvgRenderer(self)
+        self._prepared_renderer = QSvgRenderer(self)
         self._message = message
         self._last_svg = None
+        self._prepared_svg = None
+        self._prepared_error = None
+        self._status_lines = ()
         self._physical = None
         self.update()
 
     def set_preview_svg(self, svg_text: str) -> bool:
-        """Load preview SVG; return False if Qt cannot render it."""
+        """Load source/context SVG; return False if Qt cannot render it."""
         self._last_svg = svg_text
         renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")), self)
         if not renderer.isValid():
-            self._renderer = QSvgRenderer(self)
+            self._context_renderer = QSvgRenderer(self)
             self._message = "Preview unavailable for this layer."
             self._physical = None
             self.update()
             return False
 
-        self._renderer = renderer
-        self._message = None
+        self._context_renderer = renderer
+        if self._prepared_svg is None and self._prepared_error is None:
+            self._message = None
         self.update()
         return True
+
+    def set_prepared_plot(
+        self,
+        *,
+        prepared_svg: str | None,
+        error_message: str | None,
+        status_lines: tuple[str, ...] = (),
+    ) -> None:
+        """Set clipped machine-space plot SVG (same bytes sent toward axicli)."""
+        self._prepared_error = error_message
+        self._status_lines = status_lines
+        self._prepared_svg = prepared_svg
+        if prepared_svg:
+            renderer = QSvgRenderer(QByteArray(prepared_svg.encode("utf-8")), self)
+            if renderer.isValid():
+                self._prepared_renderer = renderer
+            else:
+                self._prepared_renderer = QSvgRenderer(self)
+        else:
+            self._prepared_renderer = QSvgRenderer(self)
+
+        if self._context_renderer.isValid():
+            self._message = None
+        elif error_message:
+            self._message = error_message
+        self.update()
 
     @property
     def artwork_transform(self) -> ArtworkTransform:
@@ -137,7 +180,7 @@ class LayerPreviewWidget(QWidget):
         svg_height_mm: float,
         work_area: PreviewWorkArea | None,
     ) -> None:
-        """Configure mm-space document size and plotter boundary (UI overlay only)."""
+        """Configure mm-space document size and plotter boundary."""
         if work_area is None or svg_width_mm <= 0 or svg_height_mm <= 0:
             self._physical = None
         else:
@@ -175,22 +218,12 @@ class LayerPreviewWidget(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#e8e8e8"))
 
-        if self._message:
+        if self._message and not self._context_renderer.isValid():
             painter.setPen(QColor("#555555"))
             painter.drawText(
                 self.rect(),
                 int(Qt.AlignmentFlag.AlignCenter),
                 self._message,
-            )
-            painter.end()
-            return
-
-        if not self._renderer.isValid():
-            painter.setPen(QColor("#555555"))
-            painter.drawText(
-                self.rect(),
-                int(Qt.AlignmentFlag.AlignCenter),
-                "Preview unavailable for this layer.",
             )
             painter.end()
             return
@@ -201,14 +234,57 @@ class LayerPreviewWidget(QWidget):
         else:
             self._paint_legacy_preview(painter)
 
+        if self._status_lines or self._prepared_error:
+            self._paint_status_footer(painter)
+
         painter.end()
+
+    def _paint_status_footer(self, painter: QPainter) -> None:
+        lines = list(self._status_lines)
+        if not lines and self._prepared_error:
+            lines = [self._prepared_error]
+        if not lines:
+            return
+        painter.save()
+        painter.setPen(QColor("#664400"))
+        font = QFont(painter.font())
+        font.setPointSize(max(font.pointSize() - 1, 8))
+        painter.setFont(font)
+        footer = self.rect().adjusted(8, 0, -8, -4)
+        painter.drawText(
+            footer,
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom),
+            "\n".join(lines),
+        )
+        painter.restore()
 
     def _paint_legacy_preview(self, painter: QPainter) -> None:
         available = self._available_rect()
-        source_width, source_height = svg_render_source_size(self._renderer)
+        if self._prepared_renderer.isValid():
+            source_width = self._prepared_renderer.defaultSize().width()
+            source_height = self._prepared_renderer.defaultSize().height()
+            if source_width <= 0 or source_height <= 0:
+                view_box = self._prepared_renderer.viewBoxF()
+                source_width = view_box.width()
+                source_height = view_box.height()
+            target = fit_rect_preserve_aspect(source_width, source_height, available)
+            if target.width() > 0 and target.height() > 0:
+                self._prepared_renderer.render(painter, target)
+            return
+
+        if not self._context_renderer.isValid():
+            painter.setPen(QColor("#555555"))
+            painter.drawText(
+                self.rect(),
+                int(Qt.AlignmentFlag.AlignCenter),
+                "Preview unavailable for this layer.",
+            )
+            return
+
+        source_width, source_height = svg_render_source_size(self._context_renderer)
         target = fit_rect_preserve_aspect(source_width, source_height, available)
         if target.width() > 0 and target.height() > 0:
-            self._renderer.render(painter, target)
+            self._context_renderer.render(painter, target)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if (
@@ -267,18 +343,27 @@ class LayerPreviewWidget(QWidget):
         painter.save()
         painter.translate(layout.workspace_x_px, layout.workspace_y_px)
 
-        if page_w_px > 0 and page_h_px > 0:
+        if self._context_renderer.isValid() and page_w_px > 0 and page_h_px > 0:
             painter.save()
             painter.translate(transform.x_mm * scale_px, transform.y_mm * scale_px)
             painter.scale(transform.scale, transform.scale)
             painter.fillRect(page_target, QColor("#ffffff"))
-            painter.setOpacity(0.35)
-            self._renderer.render(painter, page_target)
-            painter.setOpacity(1.0)
-            if work_w_px > 0 and work_h_px > 0:
-                painter.setClipRect(work_target)
-            self._renderer.render(painter, page_target)
+            painter.setOpacity(0.22)
+            self._context_renderer.render(painter, page_target)
             painter.restore()
+
+        if self._prepared_renderer.isValid() and work_w_px > 0 and work_h_px > 0:
+            painter.save()
+            painter.setClipRect(work_target)
+            self._prepared_renderer.render(painter, work_target)
+            painter.restore()
+        elif self._prepared_error and not self._prepared_renderer.isValid():
+            painter.setPen(QColor("#884400"))
+            painter.drawText(
+                work_target,
+                int(Qt.AlignmentFlag.AlignCenter),
+                self._prepared_error,
+            )
 
         wx, wy, ww, wh = work_target.x(), work_target.y(), work_target.width(), work_target.height()
         if ww > 0 and wh > 0:
