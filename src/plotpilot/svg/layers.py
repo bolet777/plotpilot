@@ -78,8 +78,12 @@ def _root_group_display_name(element: Element, fallback_index: int) -> str:
     return f"Group {fallback_index}"
 
 
-def _is_meaningful_root_group(element: Element, document_root: Element) -> bool:
-    return _count_drawables(element, document_root) > 0
+def _is_meaningful_root_group(
+    element: Element,
+    document_root: Element,
+    parent_map: dict[Element, Element],
+) -> bool:
+    return _count_drawables(element, document_root, parent_map) > 0
 
 
 def _layer_stable_id(element: Element, order: int) -> str:
@@ -118,22 +122,45 @@ def _color_from_element(element: Element) -> str | None:
     return None
 
 
-def _element_path(root: Element, target: Element) -> list[Element] | None:
-    if root is target:
-        return [root]
-
-    for child in root:
-        sub = _element_path(child, target)
-        if sub is not None:
-            return [root, *sub]
-    return None
+def _build_parent_map(root: Element) -> dict[Element, Element]:
+    parent_map: dict[Element, Element] = {}
+    for parent in root.iter():
+        for child in parent:
+            parent_map[child] = parent
+    return parent_map
 
 
-def _is_under_defs(root: Element, element: Element) -> bool:
-    path = _element_path(root, element)
-    if path is None:
-        return False
-    return any(_local_tag(node.tag) == "defs" for node in path)
+def _is_under_defs(
+    document_root: Element,
+    element: Element,
+    parent_map: dict[Element, Element],
+) -> bool:
+    node: Element | None = element
+    while node is not None and node is not document_root:
+        if _local_tag(node.tag) == "defs":
+            return True
+        node = parent_map.get(node)
+    return False
+
+
+def _is_layer_hidden(element: Element) -> bool:
+    display = element.get("display")
+    if display is not None and display.strip().lower() == "none":
+        return True
+    visibility = element.get("visibility")
+    if visibility is not None and visibility.strip().lower() in {"hidden", "collapse"}:
+        return True
+    style = element.get("style") or ""
+    hidden_display = _parse_style_property(style, "display")
+    if hidden_display is not None and hidden_display.strip().lower() == "none":
+        return True
+    hidden_visibility = _parse_style_property(style, "visibility")
+    if hidden_visibility is not None and hidden_visibility.strip().lower() in {
+        "hidden",
+        "collapse",
+    }:
+        return True
+    return False
 
 
 def _iter_subtree(element: Element):
@@ -142,13 +169,17 @@ def _iter_subtree(element: Element):
         yield from _iter_subtree(child)
 
 
-def _representative_color(layer_element: Element, document_root: Element) -> str | None:
+def _representative_color(
+    layer_element: Element,
+    document_root: Element,
+    parent_map: dict[Element, Element],
+) -> str | None:
     for node in _iter_subtree(layer_element):
         if node is layer_element:
             continue
         if _local_tag(node.tag) not in DRAWABLE_TAGS:
             continue
-        if _is_under_defs(document_root, node):
+        if _is_under_defs(document_root, node, parent_map):
             continue
         color = _color_from_element(node)
         if color is not None:
@@ -156,14 +187,18 @@ def _representative_color(layer_element: Element, document_root: Element) -> str
     return None
 
 
-def _count_drawables(layer_element: Element, document_root: Element) -> int:
+def _count_drawables(
+    layer_element: Element,
+    document_root: Element,
+    parent_map: dict[Element, Element],
+) -> int:
     count = 0
     for node in _iter_subtree(layer_element):
         if node is layer_element:
             continue
         if _local_tag(node.tag) not in DRAWABLE_TAGS:
             continue
-        if _is_under_defs(document_root, node):
+        if _is_under_defs(document_root, node, parent_map):
             continue
         count += 1
     return count
@@ -174,6 +209,7 @@ def _build_layer(
     order: int,
     name_index: int,
     document_root: Element,
+    parent_map: dict[Element, Element],
     *,
     source: LayerSource,
     display_name_fn=_layer_display_name,
@@ -183,13 +219,17 @@ def _build_layer(
         name=display_name_fn(element, name_index),
         order=order,
         element=element,
-        representative_color=_representative_color(element, document_root),
-        drawable_count=_count_drawables(element, document_root),
+        representative_color=_representative_color(element, document_root, parent_map),
+        drawable_count=_count_drawables(element, document_root, parent_map),
         source=source,
+        hidden=_is_layer_hidden(element),
     )
 
 
-def _synthetic_document_layer(document: SvgDocument) -> SvgLayer:
+def _synthetic_document_layer(
+    document: SvgDocument,
+    parent_map: dict[Element, Element],
+) -> SvgLayer:
     root = document.root
     name = document.name if document.name else "Document"
     layer_id = root.get("id") or "document"
@@ -202,14 +242,21 @@ def _synthetic_document_layer(document: SvgDocument) -> SvgLayer:
         name=name,
         order=0,
         element=root,
-        representative_color=_representative_color(root, root),
-        drawable_count=_count_drawables(root, root),
+        representative_color=_representative_color(root, root, parent_map),
+        drawable_count=_count_drawables(root, root, parent_map),
         source=LayerSource.DOCUMENT,
     )
 
 
-def _extract_inkscape_layers(root: Element) -> list[SvgLayer]:
-    layer_elements = [el for el in root.iter() if is_inkscape_layer(el)]
+def _extract_inkscape_layers(
+    root: Element,
+    parent_map: dict[Element, Element],
+) -> list[SvgLayer]:
+    layer_elements = [
+        el
+        for el in root.iter()
+        if is_inkscape_layer(el) and not _is_under_defs(root, el, parent_map)
+    ]
     layers: list[SvgLayer] = []
     unnamed_counter = 0
     for order, element in enumerate(layer_elements):
@@ -226,18 +273,22 @@ def _extract_inkscape_layers(root: Element) -> list[SvgLayer]:
                 order,
                 name_index,
                 root,
+                parent_map,
                 source=LayerSource.INKSCAPE,
             )
         )
     return layers
 
 
-def _extract_root_group_layers(root: Element) -> list[SvgLayer]:
+def _extract_root_group_layers(
+    root: Element,
+    parent_map: dict[Element, Element],
+) -> list[SvgLayer]:
     group_elements: list[Element] = []
     for child in root:
         if _local_tag(child.tag) != "g":
             continue
-        if _is_meaningful_root_group(child, root):
+        if _is_meaningful_root_group(child, root, parent_map):
             group_elements.append(child)
 
     layers: list[SvgLayer] = []
@@ -257,6 +308,7 @@ def _extract_root_group_layers(root: Element) -> list[SvgLayer]:
                 order,
                 name_index,
                 root,
+                parent_map,
                 source=LayerSource.ROOT_GROUP,
                 display_name_fn=_root_group_display_name,
             )
@@ -267,15 +319,16 @@ def _extract_root_group_layers(root: Element) -> list[SvgLayer]:
 def extract_layers(document: SvgDocument) -> list[SvgLayer]:
     """Return layers: Inkscape, else root groups, else one synthetic document layer."""
     root = document.root
+    parent_map = _build_parent_map(root)
     if not is_svg_root(root):
-        return [_synthetic_document_layer(document)]
+        return [_synthetic_document_layer(document, parent_map)]
 
-    inkscape_layers = _extract_inkscape_layers(root)
+    inkscape_layers = _extract_inkscape_layers(root, parent_map)
     if inkscape_layers:
         return inkscape_layers
 
-    root_group_layers = _extract_root_group_layers(root)
+    root_group_layers = _extract_root_group_layers(root, parent_map)
     if root_group_layers:
         return root_group_layers
 
-    return [_synthetic_document_layer(document)]
+    return [_synthetic_document_layer(document, parent_map)]
