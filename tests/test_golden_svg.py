@@ -69,12 +69,10 @@ def test_b2_near_complete_arc_keeps_circle_bounds() -> None:
     assert_golden("paths/b2_near_complete_arc")
 
 
-@pytest.mark.xfail(reason="B3: viewBox-less user units are CSS px, not a coordinate heuristic")
 def test_b3_viewboxless_small_rect_is_css_pixels() -> None:
     assert_golden("square/b3_viewboxless_rect")
 
 
-@pytest.mark.xfail(reason="B3: viewBox-less physical scale must not depend on unrelated geometry")
 def test_b3_unrelated_geometry_does_not_change_rect_scale() -> None:
     small = observe_golden("square/b3_viewboxless_rect")
     large = observe_golden("square/b3_viewboxless_rect_plus_line")
@@ -94,7 +92,6 @@ def test_b3_unrelated_geometry_does_not_change_rect_scale() -> None:
     assert polyline_bbox(large_rects) == pytest.approx(expected, abs=0.02)
 
 
-@pytest.mark.xfail(reason="B5: isolating an Inkscape layer changes px scale")
 def test_b5_isolated_layer_matches_document_scale() -> None:
     assert_golden("layers/b5_px_inkscape_layer", only="isolated")
 
@@ -109,7 +106,6 @@ def test_b7_child_layer_keeps_parent_transform() -> None:
     assert_golden("layers/b7_nested_transformed_layer", only="child")
 
 
-@pytest.mark.xfail(reason="B10: nested marker viewBox must not become the root viewBox")
 def test_b10_marker_viewbox_does_not_rescale_page() -> None:
     assert_golden("groups/b10_marker_viewbox_200")
 

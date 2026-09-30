@@ -10,6 +10,16 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.svg.parse import is_svg_root
 
+_SVG_NS = "http://www.w3.org/2000/svg"
+_INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
+_SODIPODI_NS = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+_XLINK_NS = "http://www.w3.org/1999/xlink"
+
+ET.register_namespace("", _SVG_NS)
+ET.register_namespace("inkscape", _INKSCAPE_NS)
+ET.register_namespace("sodipodi", _SODIPODI_NS)
+ET.register_namespace("xlink", _XLINK_NS)
+
 
 def _local_tag(tag: str) -> str:
     if tag.startswith("{"):

@@ -97,7 +97,7 @@ def test_clip_segment_cases(
 
 def test_horizontal_line_crosses_left_boundary_in_output() -> None:
     svg = """<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
   <line x1="-20" y1="50" x2="80" y2="50" stroke="black"/>
 </svg>"""
     prepared = prepare_positioned_plot_svg(
@@ -112,7 +112,7 @@ def test_horizontal_line_crosses_left_boundary_in_output() -> None:
 
 def test_disconnected_paths_not_merged() -> None:
     svg = """<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
   <line x1="10" y1="10" x2="30" y2="10" stroke="black"/>
   <line x1="60" y1="80" x2="90" y2="80" stroke="black"/>
 </svg>"""
