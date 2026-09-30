@@ -29,6 +29,10 @@ display, attached AxiDraw, or `axicli` on `PATH`.
 | Import / smoke | `test_smoke.py` |
 
 Fixtures live in `tests/fixtures/` (sample SVGs for layers, preview, errors).
+Golden plot geometry lives in `tests/fixtures/golden/` with hand-calculated
+millimeter expectations. See [tests/fixtures/golden/README.md](fixtures/golden/README.md).
+`tests/test_golden_svg.py` marks confirmed geometry bugs `xfail` with audit ids
+(`B1`, `B2`, …).
 
 ## Commands
 

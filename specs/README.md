@@ -29,9 +29,13 @@ specs/NNN-short-name/
 | 008 | [safe-stop-home](008-safe-stop-home/) | Stop → raise pen → home → disable XY |
 | 009 | [root-groups-as-layers](009-root-groups-as-layers/) | Fallback layers from root `<g>` groups |
 | 010 | [macos-app-bundle](010-macos-app-bundle/) | PyInstaller `PlotPilot.app`, `lance.sh`, icons |
+| 011 | [test-suite-fast-and-headless](011-test-suite-fast-and-headless/) | Fast pytest; hardware tests opt-in |
+| 012 | [plot-optimization](012-plot-optimization/) | Path reordering option sent to axicli |
 | 013 | [plotter-model-and-bounds](013-plotter-model-and-bounds/) | Model travel limits and page preflight |
 | 014 | [plot-progress](014-plot-progress/) | Plot progress and preview estimate |
 | 015 | [viewport-positioning-and-clipping](015-viewport-positioning-and-clipping/) | Position/scale artwork; geometric clip before axicli |
+| 016 | [project-session](016-project-session/) | Versioned `.plotpilot` save and reopen |
+| 017 | [svg-golden-baseline](017-svg-golden-baseline/) | SVG golden oracles; known geometry bugs as xfail |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

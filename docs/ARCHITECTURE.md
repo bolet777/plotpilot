@@ -1,8 +1,8 @@
 # PlotPilot architecture
 
 High-level layout of the application as implemented. User capabilities map to
-SpecKit slices **001–010** under `specs/`; this document describes how code is
-organized today.
+SpecKit slices **001–016** under `specs/`; slice **017** adds the SVG golden
+baseline. This document describes how code is organized today.
 
 ## Goals
 
@@ -18,7 +18,8 @@ src/plotpilot/
   app/           `run()`, macOS Dock/menu branding (`macos.py`)
   resources/     App icons (PNG sizes + `plotpilot.icns`)
   ui/            MainWindow, LayerPreviewWidget, PlotSettingsWidget
-  svg/           parse.py, layers.py, preview.py
+  svg/           parse.py, layers.py, preview.py, plot_dimensions.py
+  geometry/      plot_viewport.py, liang_barsky.py — mm mapping, flatten, clip
   plotter/       PlotterBackend protocol, axidraw.py (axicli), fake.py
   services/      svg_loader, layer_service, preview_service, plot_service,
                  plotter_service, multi_layer_plot_service, settings_service
@@ -33,14 +34,17 @@ flowchart TB
   ui --> services
   services --> models
   services --> svg
+  services --> geometry
   services --> plotter
   svg --> models
+  geometry --> models
   plotter --> models
   app --> ui
 ```
 
 - **ui** calls **services** only (not `plotter` or low-level SVG parsers directly).
-- **services** coordinate **models**, **svg**, and **plotter**.
+- **services** coordinate **models**, **svg**, **geometry**, and **plotter**.
+- **geometry** maps prepared artwork into the machine viewport. It does not import Qt.
 - **plotter** exposes detect, pen, plot, walk_home, disable_xy via `PlotterBackend`.
 - **svg** has no Qt imports.
 
@@ -58,7 +62,8 @@ Layer selection → `preview_svg_for_layer` → `LayerPreviewWidget` renders SVG
 ### Single-layer plot
 
 UI → `PlotterService.start_plot_layer` → build layer SVG (`plot_svg_for_layer`) →
-temp file → `AxiDrawCliBackend.plot_svg` (subprocess `axicli`) with snapshotted
+`prepare_layer_plot_svg` (transform, flatten, clip) → temp file →
+`AxiDrawCliBackend.plot_svg` (subprocess `axicli`) with snapshotted
 `PlotSettings`.
 
 ### Multi-layer plot
@@ -76,7 +81,7 @@ UI **Stop** → cancel plot subprocess if needed → `request_safe_stop`:
 `PlotterService` runs detect/pen/plot on `QThreadPool`; idle timer triggers
 passive `detect_presence`; UI binds to `status_changed` and `plot_state_changed`.
 
-## SpecKit alignment (delivered slices)
+## SpecKit alignment
 
 | Slice | Topic |
 |-------|--------|
@@ -90,6 +95,13 @@ passive `detect_presence`; UI binds to `status_changed` and `plot_state_changed`
 | 008 | Safe stop and home sequence |
 | 009 | Root SVG groups as layers fallback |
 | 010 | macOS `PlotPilot.app` (PyInstaller, `lance.sh`) |
+| 011 | Fast headless test suite; hardware marker |
+| 012 | Optional path reordering (`-G1`) |
+| 013 | Plotter model travel limits and page preflight |
+| 014 | Plot progress and duration estimate |
+| 015 | Artwork position/scale and geometric clip |
+| 016 | `.plotpilot` project save and reopen |
+| 017 | SVG golden baseline (oracles; no geometry behavior change) |
 
 ## Platform notes
 

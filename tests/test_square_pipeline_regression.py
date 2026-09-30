@@ -10,9 +10,9 @@ import pytest
 from svgelements import SVG, Line
 
 from plotpilot.geometry.plot_viewport import (
-    _SvgToMm,
     _parse_path_d_coords,
     _read_viewbox_user,
+    _SvgToMm,
     prepare_positioned_plot_svg,
 )
 from plotpilot.models.artwork_transform import ArtworkTransform
@@ -114,9 +114,7 @@ def test_svgelements_viewbox_semantics_documented_by_mm_mapping() -> None:
         if not hasattr(element, "segments"):
             continue
         lines = [
-            segment
-            for segment in element.segments(transformed=True)
-            if isinstance(segment, Line)
+            segment for segment in element.segments(transformed=True) if isinstance(segment, Line)
         ]
         assert lines
         first = lines[0]
@@ -154,8 +152,13 @@ def test_viewbox_physical_size_combinations(svg_text: str, expected_end_x_mm: fl
     assert coords[-1][0] == pytest.approx(expected_end_x_mm, abs=0.05)
 
 
-def test_viewboxless_large_coordinates_use_viewport_pixels() -> None:
-    """DrawingBot-style exports: no viewBox but transformed coords exceed page user width."""
+def test_viewboxless_user_units_are_css_pixels() -> None:
+    """T7: without a viewBox, user units are CSS px (25.4/96 mm), not page millimeters.
+
+    These coordinates are large enough that the current B3 heuristic agrees with
+    that standard. The small-coordinate contradiction is the B3 golden xfail.
+    """
+    css_px_mm = 25.4 / 96
     svg = """<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm">
   <path d="M 112.25 79.71 L 900.5 150.2" stroke="#312b2b"/>
@@ -167,8 +170,8 @@ def test_viewboxless_large_coordinates_use_viewport_pixels() -> None:
         transform=ArtworkTransform.identity(),
     )
     coords = _path_coords_from_svg(prepared.svg_text)
-    assert coords[0][0] == pytest.approx(29.69, abs=0.05)
-    assert coords[-1][0] == pytest.approx(238.2, abs=0.2)
+    assert coords[0] == pytest.approx((112.25 * css_px_mm, 79.71 * css_px_mm), abs=0.05)
+    assert coords[-1] == pytest.approx((900.5 * css_px_mm, 150.2 * css_px_mm), abs=0.05)
 
 
 def test_a4_centered_rectangle_identity() -> None:

@@ -1,0 +1,16 @@
+{
+  "audit_ids": ["B10"],
+  "description": "No root viewBox. A marker viewBox of 0 0 200 200 must not become the page viewBox. The rectangle stays in CSS px, the same size as groups/b10_marker_viewbox_10.",
+  "viewport_mm": [200.0, 200.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [2.645833, 2.645833, 15.875, 15.875],
+  "polylines_mm": [
+    [
+      [2.645833, 2.645833],
+      [15.875, 2.645833],
+      [15.875, 15.875],
+      [2.645833, 15.875],
+      [2.645833, 2.645833]
+    ]
+  ]
+}

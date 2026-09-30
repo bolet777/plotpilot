@@ -1,0 +1,16 @@
+{
+  "audit_ids": ["B10"],
+  "description": "Audit reproduction: no root viewBox, marker viewBox 0 0 10 10, rect 10,10,50,50. Correct scale is CSS px. Current output matches that box even though the viewBox regex reads the marker; this case locks the correct millimeters.",
+  "viewport_mm": [200.0, 200.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [2.645833, 2.645833, 15.875, 15.875],
+  "polylines_mm": [
+    [
+      [2.645833, 2.645833],
+      [15.875, 2.645833],
+      [15.875, 15.875],
+      [2.645833, 15.875],
+      [2.645833, 2.645833]
+    ]
+  ]
+}

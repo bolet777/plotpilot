@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plotpilot.models.multi_layer_job import MultiLayerJobState
+from plotpilot.models.plot_job import PlotPhase
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
 from plotpilot.plotter.fake import FakePlotterBackend
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
@@ -134,7 +135,11 @@ def test_checkboxes_disabled_during_job(qapp, monkeypatch) -> None:
 
 
 def test_synthetic_document_layer(qapp, monkeypatch) -> None:
-    """Synthetic single-layer doc: viewport prep may reject tiny px-only art (no modal hang)."""
+    """B11: this document fails in the async plot worker, not in a warning modal.
+
+    Preparation rejects the fill-only artwork. The test waits until the plot
+    phase is FAILED and the multi-layer job is ERROR.
+    """
     fake = FakePlotterBackend(
         detect_result=PlotterStatus(state=PlotterConnectionState.CONNECTED, message="ok")
     )
@@ -155,5 +160,8 @@ def test_synthetic_document_layer(qapp, monkeypatch) -> None:
         lambda *args, **kwargs: warnings.append(str(args[2]) if len(args) > 2 else ""),
     )
     window._on_plot_checked_layers()
+    _wait_for_job_state(window.multi_layer_service, MultiLayerJobState.ERROR)
+    assert window.plotter_service.plot_state.phase is PlotPhase.FAILED
     assert fake.plot_paths == []
-    assert any("intersects" in message.lower() for message in warnings)
+    assert warnings == []
+    assert "intersects" in window.multi_layer_service.job.error_detail.lower()

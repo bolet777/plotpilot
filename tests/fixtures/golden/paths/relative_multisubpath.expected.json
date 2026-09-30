@@ -1,0 +1,11 @@
+{
+  "audit_ids": [],
+  "description": "Two closed squares in one path: relative commands and a second subpath.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [10.0, 10.0, 60.0, 60.0],
+  "polylines_mm": [
+    [[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0], [10.0, 10.0]],
+    [[50.0, 50.0], [60.0, 50.0], [60.0, 60.0], [50.0, 60.0], [50.0, 50.0]]
+  ]
+}

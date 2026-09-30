@@ -1,0 +1,11 @@
+{
+  "audit_ids": ["B6", "T6"],
+  "description": "Root CSS class supplies the stroke. Whole-document preparation keeps both rectangles.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [10.0, 10.0, 80.0, 80.0],
+  "polylines_mm": [
+    [[10.0, 10.0], [60.0, 10.0], [60.0, 60.0], [10.0, 60.0], [10.0, 10.0]],
+    [[60.0, 60.0], [80.0, 60.0], [80.0, 80.0], [60.0, 80.0], [60.0, 60.0]]
+  ]
+}

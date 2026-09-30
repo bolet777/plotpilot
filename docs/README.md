@@ -5,12 +5,13 @@
 - [Architecture](ARCHITECTURE.md) — modules, data flows, SpecKit slice map
 - [Project README](../README.md) — setup, run, feature summary
 - [Constitution](../.specify/memory/constitution.md) — principles and quality gates
+- [Audit 2026-09-30](AUDIT-2026-09-30.md) — technical/product audit, SVG pipeline risks, prioritized roadmap (FR)
 
 ## Features (SpecKit)
 
 Each capability is specified under `specs/NNN-slug/` (`spec.md`, `plan.md`, `tasks.md`, …).
 
-- [Feature index](../specs/README.md) — slices 001–010
+- [Feature index](../specs/README.md) — slices 001–017
 
 ### macOS app bundle
 
