@@ -12,18 +12,13 @@ from svgelements import SVG, Arc, Close, Group, Line, Move, Shape
 
 from plotpilot.geometry.liang_barsky import ClipRect, clip_segment
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
+from plotpilot.svg.page_geometry import SvgPageGeometry, parse_page_geometry
+from plotpilot.svg.plot_dimensions import PlotDimensionError
 
 CURVE_FLATNESS_MM = 0.05
 COORD_TOLERANCE_MM = 0.01
 # svgelements Shape.length() can hang on extreme cubics; cap flattening instead.
 MAX_FLATTEN_STEPS_PER_SEGMENT = 512
-
-_VIEWBOX_RE = re.compile(
-    r"viewBox\s*=\s*[\"'](?P<values>[^\"']+)[\"']",
-    re.IGNORECASE,
-)
-_NUMERIC_RE = re.compile(r"^[\s]*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
 
 
 class PlotViewportError(Exception):
@@ -56,13 +51,12 @@ def prepare_positioned_plot_svg(
         raise PlotViewportError(msg)
 
     try:
-        page = parse_physical_size(svg_text)
+        page = parse_page_geometry(svg_text)
     except PlotDimensionError as exc:
         raise PlotViewportError(exc.user_message) from exc
 
     svg_root = SVG.parse(io.StringIO(svg_text))
-    viewbox = _read_viewbox_user(svg_text, page.width_mm, page.height_mm)
-    to_mm = _SvgToMm.from_root(page.width_mm, page.height_mm, viewbox, svg_root)
+    to_mm = _SvgToMm.from_page(page, svg_root)
 
     clip = ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm)
     clipped_paths = _clip_svg_geometry(
@@ -91,102 +85,28 @@ def prepare_positioned_plot_svg(
 class _SvgToMm:
     """Map svgelements segment coordinates to physical millimeters."""
 
-    width_mm: float
-    height_mm: float
-    viewbox: tuple[float, float, float, float]
+    page: SvgPageGeometry
     viewport_width_px: float
     viewport_height_px: float
-    coordinates_in_viewport_pixels: bool
 
     @classmethod
-    def from_root(
-        cls,
-        width_mm: float,
-        height_mm: float,
-        viewbox: tuple[float, float, float, float],
-        root: SVG,
-    ) -> _SvgToMm:
+    def from_page(cls, page: SvgPageGeometry, root: SVG) -> _SvgToMm:
         return cls(
-            width_mm=width_mm,
-            height_mm=height_mm,
-            viewbox=viewbox,
+            page=page,
             viewport_width_px=float(root.width) if root.width else 0.0,
             viewport_height_px=float(root.height) if root.height else 0.0,
-            coordinates_in_viewport_pixels=_coordinates_are_viewport_pixels(root, viewbox),
         )
 
     def point(self, x: float, y: float) -> tuple[float, float]:
         """Convert one svgelements segment coordinate pair to mm."""
-        vx, vy, vw, vh = self.viewbox
-        if (
-            self.coordinates_in_viewport_pixels
-            and self.viewport_width_px > 0
-            and self.viewport_height_px > 0
-            and vw > 0
-            and vh > 0
-        ):
-            # segments(transformed=True) are in root viewport pixels for viewBox SVGs and
-            # for some viewBox-less exports (e.g. DrawingBot) where coords exceed user width.
-            ux = vx + (x / self.viewport_width_px) * vw
-            uy = vy + (y / self.viewport_height_px) * vh
-        else:
-            ux, uy = x, y
-        if vw <= 0 or vh <= 0:
-            return ux, uy
-        return (ux - vx) * self.width_mm / vw, (uy - vy) * self.height_mm / vh
-
-
-def _coordinates_are_viewport_pixels(
-    root: SVG,
-    viewbox: tuple[float, float, float, float],
-) -> bool:
-    if root.viewbox is not None:
-        return True
-    _vx, _vy, vw, vh = viewbox
-    if vw <= 0 or vh <= 0:
-        return False
-    max_abs = _max_transformed_coordinate(root)
-    return max_abs > max(vw, vh) * 1.01
-
-
-def _max_transformed_coordinate(root: SVG) -> float:
-    max_abs = 0.0
-    for element in root.elements():
-        if isinstance(element, (SVG, Group)) or not isinstance(element, Shape):
-            continue
-        for segment in element.segments(transformed=True):
-            for point in (getattr(segment, "start", None), getattr(segment, "end", None)):
-                if point is None or not hasattr(point, "x"):
-                    continue
-                max_abs = max(max_abs, abs(point.x), abs(point.y))
-    return max_abs
-
-
-def _read_viewbox_user(
-    svg_text: str,
-    width_mm: float,
-    height_mm: float,
-) -> tuple[float, float, float, float]:
-    match = _VIEWBOX_RE.search(svg_text)
-    if match:
-        parts = match.group("values").replace(",", " ").split()
-        if len(parts) == 4:
-            return tuple(float(p) for p in parts)  # type: ignore[return-value]
-
-    root_match = re.search(r"<svg[^>]+width\s*=\s*[\"']([^\"']+)", svg_text, re.I)
-    height_match = re.search(r"<svg[^>]+height\s*=\s*[\"']([^\"']+)", svg_text, re.I)
-    user_w = _numeric_length(root_match.group(1) if root_match else str(width_mm))
-    user_h = _numeric_length(height_match.group(1) if height_match else str(height_mm))
-    if user_w <= 0 or user_h <= 0:
-        return 0.0, 0.0, width_mm, height_mm
-    return 0.0, 0.0, user_w, user_h
-
-
-def _numeric_length(raw: str) -> float:
-    match = _NUMERIC_RE.match(raw.strip())
-    if not match:
-        return 0.0
-    return float(match.group(1))
+        if self.page.viewbox is None:
+            return self.page.user_point_to_mm(x, y)
+        return self.page.viewport_pixel_to_mm(
+            x,
+            y,
+            viewport_width_px=self.viewport_width_px,
+            viewport_height_px=self.viewport_height_px,
+        )
 
 
 def _clip_svg_geometry(

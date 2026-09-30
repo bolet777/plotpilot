@@ -11,7 +11,6 @@ from svgelements import SVG, Line
 
 from plotpilot.geometry.plot_viewport import (
     _parse_path_d_coords,
-    _read_viewbox_user,
     _SvgToMm,
     prepare_positioned_plot_svg,
 )
@@ -21,7 +20,7 @@ from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.plot_service import plot_svg_for_layer
 from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
 from plotpilot.services.svg_loader import load_svg_from_path
-from plotpilot.svg.plot_dimensions import parse_physical_size
+from plotpilot.svg.page_geometry import parse_page_geometry
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -95,21 +94,19 @@ def test_square_pipeline_stages_via_layer_isolation() -> None:
     )
 
     for svg_text in (document.raw_text, isolated):
-        page = parse_physical_size(svg_text)
-        viewbox = _read_viewbox_user(svg_text, page.width_mm, page.height_mm)
+        page = parse_page_geometry(svg_text)
         assert page.width_mm == pytest.approx(100.0)
-        assert viewbox[2:] == pytest.approx((100.0, 100.0))
+        assert page.viewbox == pytest.approx((0.0, 0.0, 100.0, 100.0))
 
     _assert_square_coords(_path_coords_from_svg(prepared.svg_text))
 
 
 def test_svgelements_viewbox_semantics_documented_by_mm_mapping() -> None:
     """With viewBox, segment coords are root pixels; mapper must yield viewBox user mm."""
-    page = parse_physical_size(SQUARE_PATH)
-    viewbox = _read_viewbox_user(SQUARE_PATH, page.width_mm, page.height_mm)
+    page = parse_page_geometry(SQUARE_PATH)
     root = SVG.parse(io.StringIO(SQUARE_PATH))
-    to_mm = _SvgToMm.from_root(page.width_mm, page.height_mm, viewbox, root)
-    assert to_mm.coordinates_in_viewport_pixels is True
+    to_mm = _SvgToMm.from_page(page, root)
+    assert page.viewbox is not None
     for element in root.elements():
         if not hasattr(element, "segments"):
             continue
