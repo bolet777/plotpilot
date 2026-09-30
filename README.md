@@ -25,7 +25,10 @@ via the external `axicli` CLI (must be installed and on `PATH`).
 | App icon, window icon, macOS Dock branding via `.app` | Done |
 | Release CI, code signing, notarization | Not yet |
 
-SpecKit slices **001–010** are implemented in code; see [specs/README.md](specs/README.md).
+SpecKit slices **001–016** are implemented in code; see [specs/README.md](specs/README.md).
+SVG geometry reliability is tracked separately in
+[017-svg-golden-baseline](specs/017-svg-golden-baseline/) and
+[docs/AUDIT-2026-09-30.md](docs/AUDIT-2026-09-30.md).
 
 ## Features (user-facing)
 
@@ -93,6 +96,7 @@ src/plotpilot/
   resources/   Bundled icons (PNG + ICNS)
   ui/          Main window, preview, plot settings widgets
   svg/         Parse SVG, layers, preview SVG generation
+  geometry/    Viewport transform, flattening, and clipping before plot
   plotter/     PlotterBackend, AxiDraw CLI adapter, fake backend for tests
   services/    SVG load, layers, preview, plotter, multi-layer, settings
   models/      Document, layers, jobs, plotter status, settings
@@ -100,7 +104,7 @@ packaging/macos/   PyInstaller entry + spec
 scripts/           Icon regeneration, macOS app build
 assets/icons/      Source artwork and generated icon set
 tests/             pytest (logic + MainWindow integration with fakes)
-specs/             SpecKit feature specs (001–010)
+specs/             SpecKit feature specs (001–017)
 docs/              Architecture and doc index
 .specify/          SpecKit templates and scripts
 .cursor/skills/    SpecKit agent skills for Cursor

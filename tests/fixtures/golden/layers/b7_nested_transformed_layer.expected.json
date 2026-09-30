@@ -1,0 +1,14 @@
+{
+  "audit_ids": ["B7", "T6"],
+  "description": "Nested Inkscape layer under a translated, stroked parent. Parent and child isolation must both plot the 10 mm square at (40, 40).",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "preparations": [
+    {"id": "parent", "mode": "isolated_layer", "layer_name": "Parent"},
+    {"id": "child", "mode": "isolated_layer", "layer_name": "Child"}
+  ],
+  "bbox_mm": [40.0, 40.0, 50.0, 50.0],
+  "polylines_mm": [
+    [[40.0, 40.0], [50.0, 40.0], [50.0, 50.0], [40.0, 50.0], [40.0, 40.0]]
+  ]
+}

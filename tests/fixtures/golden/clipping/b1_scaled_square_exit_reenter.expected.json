@@ -1,0 +1,12 @@
+{
+  "audit_ids": ["B1", "T4"],
+  "description": "Square 10..90 mm scaled by 2, then clipped to a 100 mm viewport. Correct pieces are the clipped top edge and the clipped left edge.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "transform": {"x_mm": 0.0, "y_mm": 0.0, "scale": 2.0},
+  "bbox_mm": [20.0, 20.0, 100.0, 100.0],
+  "polylines_mm": [
+    [[20.0, 20.0], [100.0, 20.0]],
+    [[20.0, 100.0], [20.0, 20.0]]
+  ]
+}

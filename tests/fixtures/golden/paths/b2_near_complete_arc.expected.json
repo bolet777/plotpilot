@@ -1,0 +1,16 @@
+{
+  "audit_ids": ["B2", "T5"],
+  "description": "Near-complete circular arc, large-arc=1 and sweep=1. SVG endpoint-to-center conversion places the center near (89.975, 51.009), radius 20. The unclipped circle spans about x 69.97..109.97 and y 31.01..71.01. The 100 mm viewport clips the right side at x=100. The audit's approximate box (30..70, 30..70) is the other center (sweep=0) and is not the expectation for this path.",
+  "notes": "Flattened points must stay near the circle or on the viewport boundary. A 3-point chord is incorrect.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.2,
+  "bbox_mm": [69.975, 31.009, 100.0, 71.009],
+  "min_points": 30,
+  "circle_mm": {
+    "cx": 89.974544,
+    "cy": 51.008752,
+    "r": 20.0,
+    "radial_tolerance_mm": 0.15,
+    "boundary_tolerance_mm": 0.05
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "audit_ids": ["B9"],
+  "description": "viewBox is square and the page is 200 x 100 mm. xMidYMid meet centers a 100 mm square: x 50..150, y 0..100. The viewport is larger than that square so the assertion is the mapping, not edge clipping. Preview stretching is a separate bug and is not asserted here.",
+  "viewport_mm": [200.0, 150.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [50.0, 0.0, 150.0, 100.0],
+  "polylines_mm": [
+    [[50.0, 0.0], [150.0, 0.0], [150.0, 100.0], [50.0, 100.0], [50.0, 0.0]]
+  ]
+}

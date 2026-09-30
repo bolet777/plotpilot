@@ -1,0 +1,10 @@
+{
+  "audit_ids": ["T3"],
+  "description": "Axis-aligned translate(20,30) of a 10 mm square at the origin.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [20.0, 30.0, 30.0, 40.0],
+  "polylines_mm": [
+    [[20.0, 30.0], [30.0, 30.0], [30.0, 40.0], [20.0, 40.0], [20.0, 30.0]]
+  ]
+}

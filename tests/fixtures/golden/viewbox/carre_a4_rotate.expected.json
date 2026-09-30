@@ -1,0 +1,16 @@
+{
+  "audit_ids": [],
+  "description": "CarreA4 geometry: non-zero viewBox origin and rotate(-90). Page aspect matches the viewBox (90 dpi user units on a 297 x 210 mm page), so 1 user unit = 25.4/90 mm. Corners are the transformed rect, then mapped from viewBox (-500, -105).",
+  "viewport_mm": [297.0, 210.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [5.1394, 3.2287, 291.8606, 206.7713],
+  "polylines_mm": [
+    [
+      [5.1394, 206.7713],
+      [5.1394, 3.2287],
+      [291.8606, 3.2287],
+      [291.8606, 206.7713],
+      [5.1394, 206.7713]
+    ]
+  ]
+}

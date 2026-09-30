@@ -1,0 +1,6 @@
+{
+  "audit_ids": ["B8"],
+  "decision": "Q1",
+  "policy": "pending",
+  "description": "Fill-only rectangle. Q1 is undecided: trace the outline the way axicli would, or ignore the shape and say so. This fixture does not assert plot output."
+}

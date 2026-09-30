@@ -1,0 +1,17 @@
+{
+  "audit_ids": ["B3", "T2"],
+  "description": "Same viewBox-less rectangle as b3_viewboxless_rect, plus an unrelated line to x=1100. The rectangle's physical size must stay at CSS px. The line is 1100 px = 291.041667 mm.",
+  "viewport_mm": [400.0, 300.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [0.0, 0.0, 291.041667, 15.875],
+  "polylines_mm": [
+    [
+      [2.645833, 2.645833],
+      [29.104167, 2.645833],
+      [29.104167, 15.875],
+      [2.645833, 15.875],
+      [2.645833, 2.645833]
+    ],
+    [[0.0, 0.0], [291.041667, 0.0]]
+  ]
+}

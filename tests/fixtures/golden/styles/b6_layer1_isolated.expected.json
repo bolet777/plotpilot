@@ -1,0 +1,14 @@
+{
+  "audit_ids": ["B6", "T6"],
+  "description": "Isolating Layer 1 must keep the root .st0 stroke. Expected rectangle is 10,10,50,50 mm.",
+  "svg": "b6_root_style_document.svg",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "preparations": [
+    {"id": "isolated", "mode": "isolated_layer", "layer_name": "Layer 1"}
+  ],
+  "bbox_mm": [10.0, 10.0, 60.0, 60.0],
+  "polylines_mm": [
+    [[10.0, 10.0], [60.0, 10.0], [60.0, 60.0], [10.0, 60.0], [10.0, 10.0]]
+  ]
+}

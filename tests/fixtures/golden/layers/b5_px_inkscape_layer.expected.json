@@ -1,0 +1,20 @@
+{
+  "audit_ids": ["B5"],
+  "description": "No viewBox, 800 x 600 px page, one Inkscape layer, 100 px square. 100 px = 26.458333 mm. Whole-document preparation and isolated-layer preparation must match.",
+  "viewport_mm": [200.0, 200.0],
+  "tolerance_mm": 0.02,
+  "preparations": [
+    {"id": "document", "mode": "document"},
+    {"id": "isolated", "mode": "isolated_layer", "layer_name": "L"}
+  ],
+  "bbox_mm": [0.0, 0.0, 26.458333, 26.458333],
+  "polylines_mm": [
+    [
+      [0.0, 0.0],
+      [26.458333, 0.0],
+      [26.458333, 26.458333],
+      [0.0, 26.458333],
+      [0.0, 0.0]
+    ]
+  ]
+}

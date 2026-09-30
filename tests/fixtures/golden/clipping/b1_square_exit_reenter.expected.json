@@ -1,0 +1,11 @@
+{
+  "audit_ids": ["B1", "T4"],
+  "description": "Square 50..150 mm on a 200 mm page, clipped to a 100 mm viewport. The right and bottom edges are outside. Only the clipped top edge and the clipped left edge remain. There is no diagonal.",
+  "viewport_mm": [100.0, 100.0],
+  "tolerance_mm": 0.02,
+  "bbox_mm": [50.0, 50.0, 100.0, 100.0],
+  "polylines_mm": [
+    [[50.0, 50.0], [100.0, 50.0]],
+    [[50.0, 100.0], [50.0, 50.0]]
+  ]
+}
