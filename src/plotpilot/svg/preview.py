@@ -20,12 +20,40 @@ ET.register_namespace("inkscape", _INKSCAPE_NS)
 ET.register_namespace("sodipodi", _SODIPODI_NS)
 ET.register_namespace("xlink", _XLINK_NS)
 
+_ROOT_RESOURCE_TAGS = frozenset({"defs", "style"})
+
 
 def _local_tag(tag: str) -> str:
     if tag.startswith("{"):
         _, _, local = tag.partition("}")
         return local
     return tag
+
+
+def _build_parent_map(root: Element) -> dict[Element, Element]:
+    parent_map: dict[Element, Element] = {}
+    for parent in root.iter():
+        for child in parent:
+            parent_map[child] = parent
+    return parent_map
+
+
+def _ancestor_chain(
+    document_root: Element,
+    target: Element,
+    parent_map: dict[Element, Element],
+) -> list[Element]:
+    chain: list[Element] = []
+    node: Element | None = target
+    while node is not None and node is not document_root:
+        chain.append(node)
+        node = parent_map.get(node)
+    chain.reverse()
+    return chain
+
+
+def _shallow_element(element: Element) -> Element:
+    return Element(element.tag, dict(element.attrib))
 
 
 def _is_document_layer(document: SvgDocument, layer: SvgLayer) -> bool:
@@ -37,10 +65,31 @@ def _copy_root_shell(source_root: Element) -> Element:
     return preview_root
 
 
-def _append_defs(source_root: Element, preview_root: Element) -> None:
+def _append_root_resources(source_root: Element, preview_root: Element) -> None:
     for child in source_root:
-        if _local_tag(child.tag) == "defs":
+        if _local_tag(child.tag) in _ROOT_RESOURCE_TAGS:
             preview_root.append(copy.deepcopy(child))
+
+
+def _append_isolated_layer(
+    preview_root: Element,
+    document_root: Element,
+    layer_element: Element,
+    parent_map: dict[Element, Element],
+) -> None:
+    chain = _ancestor_chain(document_root, layer_element, parent_map)
+    if not chain:
+        return
+    if len(chain) == 1:
+        preview_root.append(copy.deepcopy(layer_element))
+        return
+
+    current = preview_root
+    for node in chain[:-1]:
+        wrapper = _shallow_element(node)
+        current.append(wrapper)
+        current = wrapper
+    current.append(copy.deepcopy(chain[-1]))
 
 
 def build_layer_preview_svg(document: SvgDocument, layer: SvgLayer) -> str:
@@ -49,8 +98,9 @@ def build_layer_preview_svg(document: SvgDocument, layer: SvgLayer) -> str:
         return document.raw_text
 
     source_root = document.root
+    parent_map = _build_parent_map(source_root)
     preview_root = _copy_root_shell(source_root)
-    _append_defs(source_root, preview_root)
-    preview_root.append(copy.deepcopy(layer.element))
+    _append_root_resources(source_root, preview_root)
+    _append_isolated_layer(preview_root, source_root, layer.element, parent_map)
 
     return ET.tostring(preview_root, encoding="unicode", xml_declaration=True)

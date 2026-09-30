@@ -26,3 +26,11 @@ class SvgLayer:
     representative_color: str | None
     drawable_count: int
     source: LayerSource = LayerSource.INKSCAPE
+    hidden: bool = False
+
+    @property
+    def list_label(self) -> str:
+        """Label for layer lists; marks hidden layers explicitly."""
+        if self.hidden:
+            return f"{self.name} (hidden)"
+        return self.name

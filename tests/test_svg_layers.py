@@ -273,6 +273,44 @@ def test_inkscape_layers_have_inkscape_source() -> None:
     assert all(layer.source is LayerSource.INKSCAPE for layer in layers)
 
 
+def test_inkscape_layer_inside_defs_is_ignored() -> None:
+    text = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+  <defs>
+    <g inkscape:groupmode="layer" inkscape:label="Defs Layer">
+      <path d="M0 0"/>
+    </g>
+  </defs>
+  <g inkscape:groupmode="layer" inkscape:label="Visible Layer">
+    <path d="M1 1"/>
+  </g>
+</svg>"""
+    layers = extract_layers(_document_from_text(text))
+    assert len(layers) == 1
+    assert layers[0].name == "Visible Layer"
+
+
+def test_hidden_layer_flag_and_list_label() -> None:
+    text = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+  <g inkscape:groupmode="layer" inkscape:label="Shown">
+    <path d="M0 0"/>
+  </g>
+  <g inkscape:groupmode="layer" inkscape:label="Ghost" style="display:none">
+    <path d="M1 1"/>
+  </g>
+</svg>"""
+    layers = extract_layers(_document_from_text(text))
+    shown = next(layer for layer in layers if layer.name == "Shown")
+    ghost = next(layer for layer in layers if layer.name == "Ghost")
+    assert shown.hidden is False
+    assert shown.list_label == "Shown"
+    assert ghost.hidden is True
+    assert ghost.list_label == "Ghost (hidden)"
+
+
 def test_drawable_count_excludes_defs() -> None:
     text = """<?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg"

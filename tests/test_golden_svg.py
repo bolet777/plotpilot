@@ -96,12 +96,10 @@ def test_b5_isolated_layer_matches_document_scale() -> None:
     assert_golden("layers/b5_px_inkscape_layer", only="isolated")
 
 
-@pytest.mark.xfail(reason="B6: root CSS class style is dropped when a layer is isolated")
 def test_b6_isolated_layer_keeps_root_style() -> None:
     assert_golden("styles/b6_layer1_isolated")
 
 
-@pytest.mark.xfail(reason="B7: nested Inkscape layer loses parent transform and stroke")
 def test_b7_child_layer_keeps_parent_transform() -> None:
     assert_golden("layers/b7_nested_transformed_layer", only="child")
 

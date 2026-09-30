@@ -958,7 +958,7 @@ class MainWindow(QMainWindow):
         self._layers_list.blockSignals(True)
         self._layers_list.clear()
         for index, layer in enumerate(self._layers, start=1):
-            item = QListWidgetItem(f"{index}  {layer.name}")
+            item = QListWidgetItem(f"{index}  {layer.list_label}")
             item.setIcon(_layer_swatch_icon(layer.representative_color))
             item.setData(Qt.ItemDataRole.UserRole, layer.layer_id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
