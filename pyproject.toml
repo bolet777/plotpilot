@@ -24,6 +24,7 @@ dev = [
     "pyinstaller>=6.10 ; sys_platform == 'darwin'",
     "pytest>=8.3",
     "ruff>=0.9",
+    "vpype>=1.15,<2",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -37,7 +38,7 @@ packages = ["src/plotpilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "slow: longer integration tests (exclude with -m 'not slow')",
     "hardware: requires physical AxiDraw (opt-in with -m hardware or --hardware)",
