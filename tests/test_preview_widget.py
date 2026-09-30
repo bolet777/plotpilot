@@ -42,6 +42,18 @@ def test_valid_preview_loads(qapp) -> None:
     assert widget.last_svg == MINIMAL_SVG
 
 
+def test_prepared_plot_svg_stored_separately_from_context(qapp) -> None:
+    widget = LayerPreviewWidget()
+    prepared = """<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+  <path d="M 0 0 L 100 100" fill="none" stroke="#000"/>
+</svg>"""
+    assert widget.set_preview_svg(MINIMAL_SVG) is True
+    widget.set_prepared_plot(prepared_svg=prepared, error_message=None)
+    assert widget.last_svg == MINIMAL_SVG
+    assert widget.prepared_svg == prepared
+
+
 def test_invalid_preview_does_not_crash(qapp) -> None:
     widget = LayerPreviewWidget()
     assert widget.set_preview_svg("<not-valid-svg") is False
