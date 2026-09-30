@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
-from svgelements import SVG, Close, Group, Line, Move, Shape
+from svgelements import SVG, Arc, Close, Group, Line, Move, Shape
 
 from plotpilot.geometry.liang_barsky import ClipRect, clip_segment
 from plotpilot.models.artwork_transform import ArtworkTransform
@@ -197,35 +197,34 @@ def _clip_svg_geometry(
 ) -> list[list[tuple[float, float]]]:
     output_paths: list[list[tuple[float, float]]] = []
     current: list[tuple[float, float]] = []
-    pen_xy: tuple[float, float] | None = None
 
     def flush() -> None:
-        nonlocal current, pen_xy
-        if len(current) >= 2:
-            output_paths.append(current)
+        nonlocal current
+        sanitized = _sanitize_polyline(current)
+        if sanitized is not None:
+            output_paths.append(sanitized)
         current = []
-        pen_xy = None
 
     def plot_segment(x0_mm: float, y0_mm: float, x1_mm: float, y1_mm: float) -> None:
-        nonlocal current, pen_xy
+        nonlocal current
         ax0, ay0 = transform.apply_point(x0_mm, y0_mm)
         ax1, ay1 = transform.apply_point(x1_mm, y1_mm)
-        if pen_xy is not None:
-            sx, sy = pen_xy
-            if (sx, sy) != (ax0, ay0):
-                ax0, ay0 = sx, sy
+        ax0, ay0 = _snap_point_to_clip(ax0, ay0, clip)
+        ax1, ay1 = _snap_point_to_clip(ax1, ay1, clip)
         accept, nx0, ny0, nx1, ny1 = clip_segment(ax0, ay0, ax1, ay1, clip)
         if not accept:
             flush()
             return
-        if pen_xy is None or not current:
+        if _points_near((nx0, ny0), (nx1, ny1)):
+            return
+        if not current:
             current = [(nx0, ny0), (nx1, ny1)]
-        elif (nx0, ny0) != current[-1]:
+        elif _points_near(current[-1], (nx0, ny0)):
+            if not _points_near(current[-1], (nx1, ny1)):
+                current.append((nx1, ny1))
+        else:
             flush()
             current = [(nx0, ny0), (nx1, ny1)]
-        elif (nx1, ny1) != current[-1]:
-            current.append((nx1, ny1))
-        pen_xy = (nx1, ny1)
 
     for element in svg.elements():
         if isinstance(element, (SVG, Group)):
@@ -297,10 +296,55 @@ def _segment_points_mm(segment: object, to_mm: _SvgToMm) -> list[tuple[float, fl
     return points
 
 
+def _snap_point_to_clip(x: float, y: float, clip: ClipRect) -> tuple[float, float]:
+    """Snap near-boundary float noise into the clip rectangle."""
+    if abs(x - clip.x_min) <= COORD_TOLERANCE_MM:
+        x = clip.x_min
+    elif abs(x - clip.x_max) <= COORD_TOLERANCE_MM:
+        x = clip.x_max
+    if abs(y - clip.y_min) <= COORD_TOLERANCE_MM:
+        y = clip.y_min
+    elif abs(y - clip.y_max) <= COORD_TOLERANCE_MM:
+        y = clip.y_max
+    return x, y
+
+
+def _points_near(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return abs(a[0] - b[0]) <= COORD_TOLERANCE_MM and abs(a[1] - b[1]) <= COORD_TOLERANCE_MM
+
+
+def _dedupe_consecutive_points(
+    points: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    if not points:
+        return []
+    deduped = [points[0]]
+    for point in points[1:]:
+        if not _points_near(deduped[-1], point):
+            deduped.append(point)
+    return deduped
+
+
+def _sanitize_polyline(points: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+    """Drop numerically degenerate polylines (B13)."""
+    deduped = _dedupe_consecutive_points(points)
+    if len(deduped) < 2:
+        return None
+    return deduped
+
+
 def _estimate_segment_length_rendered(segment: object) -> float:
     """Conservative polyline length in svgelements segment coordinates."""
     if isinstance(segment, Line):
         return math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y)
+
+    if isinstance(segment, Arc):
+        try:
+            arc_length = float(segment.length())
+        except (ValueError, ZeroDivisionError, TypeError):
+            arc_length = 0.0
+        if arc_length > 0.0:
+            return arc_length
 
     start = segment.start  # type: ignore[attr-defined]
     end = segment.end  # type: ignore[attr-defined]

@@ -57,17 +57,14 @@ def test_b8_fill_only_fixture_records_pending_decision() -> None:
     assert "stroke" not in svg_text
 
 
-@pytest.mark.xfail(reason="B1: clipping invents diagonal segments")
 def test_b1_square_exit_and_reenter_has_no_diagonal() -> None:
     assert_golden("clipping/b1_square_exit_reenter")
 
 
-@pytest.mark.xfail(reason="B1: clipping invents diagonal segments")
 def test_b1_scaled_square_exit_and_reenter_has_no_diagonal() -> None:
     assert_golden("clipping/b1_scaled_square_exit_reenter")
 
 
-@pytest.mark.xfail(reason="B2: near-complete arc flattening uses chord length")
 def test_b2_near_complete_arc_keeps_circle_bounds() -> None:
     assert_golden("paths/b2_near_complete_arc")
 
