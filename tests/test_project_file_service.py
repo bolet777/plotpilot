@@ -10,7 +10,7 @@ import pytest
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import REORDERING_BASIC, PlotSettings
 from plotpilot.models.project_session import ProjectSession
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 from plotpilot.services.project_file_service import (
     FORMAT_ID,
     ProjectFileError,
@@ -121,6 +121,22 @@ def test_plot_settings_and_transform_round_trip(tmp_path: Path) -> None:
     assert loaded.artwork_transform == session.artwork_transform
     assert loaded.plot_settings == session.plot_settings
     assert loaded.fallback_work_area == FallbackWorkArea.A3
+
+
+def test_fallback_orientation_defaults_to_portrait(tmp_path: Path) -> None:
+    project_file = tmp_path / "minimal.plotpilot"
+    project_file.write_text(
+        json.dumps(
+            {
+                "format": FORMAT_ID,
+                "version": 1,
+                "svg": {"path": str(FIXTURES / "simple.svg")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = read_project_file(project_file)
+    assert loaded.fallback_work_area_orientation is WorkAreaOrientation.PORTRAIT
 
 
 def test_fallback_work_area_defaults_to_a4(tmp_path: Path) -> None:

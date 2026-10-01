@@ -14,7 +14,7 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
 from plotpilot.services.preview_service import preview_svg_for_layer
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
 
 
@@ -82,6 +82,7 @@ def build_prepared_layer_preview(
     plot_settings: PlotSettings,
     transform: ArtworkTransform,
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
+    fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
 ) -> PreparedLayerPreview:
     """Prepare layer geometry for preview using the plot pipeline."""
     context_svg = preview_svg_for_layer(document, layer)
@@ -105,6 +106,7 @@ def build_prepared_layer_preview(
             plot_settings=plot_settings,
             transform=transform,
             fallback=fallback,
+            fallback_orientation=fallback_orientation,
         )
         error_message: str | None = None
     except PlotViewportError as exc:

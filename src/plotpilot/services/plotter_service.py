@@ -37,7 +37,7 @@ from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.bounds_service import plot_bounds_block_message
 from plotpilot.services.plot_service import plot_svg_for_layer
 from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 from plotpilot.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
@@ -424,6 +424,7 @@ class PlotterService(QObject):
         plot_settings: PlotSettings | None = None,
         artwork_transform: ArtworkTransform | None = None,
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
+        fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     ) -> str | None:
         """Estimate the final clipped SVG for each layer. Returns an error if refused."""
         if self._plot_in_flight or self._safe_stop_in_flight or self._plot_state.is_active:
@@ -451,6 +452,7 @@ class PlotterService(QObject):
                         plot_settings=settings,
                         transform=transform,
                         fallback=fallback_work_area,
+                        fallback_orientation=fallback_work_area_orientation,
                     )
                 except PlotViewportError as exc:
                     results.append((layer.name, None, _short_failure(exc.user_message)))
@@ -477,6 +479,7 @@ class PlotterService(QObject):
         plot_settings: PlotSettings | None = None,
         artwork_transform: ArtworkTransform | None = None,
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
+        fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
         layer_index: int | None = None,
         layer_count: int | None = None,
         next_layer_name: str | None = None,
@@ -523,6 +526,7 @@ class PlotterService(QObject):
                     plot_settings=plot_settings,
                     transform=transform,
                     fallback=fallback_work_area,
+                    fallback_orientation=fallback_work_area_orientation,
                 )
             except PlotViewportError as exc:
                 return PlotResult(success=False, message=exc.user_message)

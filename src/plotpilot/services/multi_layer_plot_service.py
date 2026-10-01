@@ -22,7 +22,7 @@ from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.bounds_service import plot_bounds_block_message
 from plotpilot.services.plotter_service import PlotterService
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ class MultiLayerPlotService(QObject):
         settings: PlotSettings,
         artwork_transform: ArtworkTransform | None = None,
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
+        fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     ) -> str | None:
         """Begin plotting the first layer. Returns an error message or None if started."""
         if self._job.is_active:
@@ -92,6 +93,7 @@ class MultiLayerPlotService(QObject):
                 settings=settings,
                 artwork_transform=transform,
                 fallback_work_area=fallback_work_area.value,
+                fallback_work_area_orientation=fallback_work_area_orientation.value,
                 completed_count=0,
                 message=snapshots[0].name,
             )
@@ -155,6 +157,9 @@ class MultiLayerPlotService(QObject):
             plot_settings=self._job.settings,
             artwork_transform=self._job.artwork_transform,
             fallback_work_area=FallbackWorkArea(self._job.fallback_work_area),
+            fallback_work_area_orientation=WorkAreaOrientation(
+                self._job.fallback_work_area_orientation,
+            ),
             layer_index=self._job.current_index + 1,
             layer_count=self._job.total_layers,
             next_layer_name=next_layer.name if next_layer is not None else None,

@@ -49,6 +49,7 @@ from plotpilot.services.preview_prepared_service import build_prepared_layer_pre
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
+    WorkAreaOrientation,
     preview_work_area_is_ambiguous,
     resolve_preview_work_area,
 )
@@ -201,6 +202,17 @@ class MainWindow(QMainWindow):
             self._on_fallback_work_area_changed,
         )
         fallback_row.addWidget(self._fallback_work_area_combo)
+        self._fallback_work_area_orientation_combo = QComboBox(self._fallback_work_area_row)
+        for orientation in (WorkAreaOrientation.PORTRAIT, WorkAreaOrientation.LANDSCAPE):
+            self._fallback_work_area_orientation_combo.addItem(orientation.value, orientation)
+        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
+        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
+        if orientation_index >= 0:
+            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
+        self._fallback_work_area_orientation_combo.currentIndexChanged.connect(
+            self._on_fallback_work_area_orientation_changed,
+        )
+        fallback_row.addWidget(self._fallback_work_area_orientation_combo)
         fallback_row.addStretch(1)
         preview_column.addWidget(self._fallback_work_area_row)
 
@@ -724,6 +736,7 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error:
             self._estimate_label.setText(error)
@@ -758,6 +771,7 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -796,6 +810,7 @@ class MainWindow(QMainWindow):
             settings=settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -864,6 +879,7 @@ class MainWindow(QMainWindow):
         self._settings_service.begin_project_session(
             session.plot_settings,
             session.fallback_work_area,
+            session.fallback_work_area_orientation,
         )
         self._sync_fallback_combo_from_service()
         self._apply_document(document, reset_transform=False)
@@ -925,6 +941,7 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             plot_settings=self._settings_service.plot_settings,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
 
     def _save_project(self) -> None:
@@ -954,6 +971,7 @@ class MainWindow(QMainWindow):
             self._settings_service.begin_project_session(
                 self._settings_service.plot_settings,
                 self._settings_service.preview_fallback_work_area,
+                self._settings_service.preview_fallback_work_area_orientation,
             )
         self._save_project_at_path(path)
 
@@ -997,6 +1015,12 @@ class MainWindow(QMainWindow):
             self._fallback_work_area_combo.blockSignals(True)
             self._fallback_work_area_combo.setCurrentIndex(fallback_index)
             self._fallback_work_area_combo.blockSignals(False)
+        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
+        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
+        if orientation_index >= 0:
+            self._fallback_work_area_orientation_combo.blockSignals(True)
+            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
+            self._fallback_work_area_orientation_combo.blockSignals(False)
 
     def _mark_project_dirty(self) -> None:
         if self._document is None:
@@ -1117,11 +1141,13 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             transform=self._preview.artwork_transform,
             fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
 
         work_area = resolve_preview_work_area(
             self._settings_service.plot_settings,
             fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if (
             prepared_preview.page_width_mm > 0
@@ -1155,10 +1181,20 @@ class MainWindow(QMainWindow):
         self._schedule_prepared_preview_refresh()
 
     def _on_fallback_work_area_changed(self, _index: int) -> None:
-        area = self._fallback_work_area_combo.currentData()
-        if not isinstance(area, FallbackWorkArea):
+        area = _coerce_fallback_work_area(self._fallback_work_area_combo.currentData())
+        if area is None:
             return
         self._settings_service.set_preview_fallback_work_area(area)
+        self._mark_project_dirty()
+        self._schedule_prepared_preview_refresh()
+
+    def _on_fallback_work_area_orientation_changed(self, _index: int) -> None:
+        orientation = _coerce_work_area_orientation(
+            self._fallback_work_area_orientation_combo.currentData(),
+        )
+        if orientation is None:
+            return
+        self._settings_service.set_preview_fallback_work_area_orientation(orientation)
         self._mark_project_dirty()
         self._schedule_prepared_preview_refresh()
 
@@ -1181,6 +1217,7 @@ class MainWindow(QMainWindow):
         work_area = resolve_preview_work_area(
             self._settings_service.plot_settings,
             fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if work_area is None:
             self._artwork_status_label.setText("")
@@ -1265,6 +1302,26 @@ class MainWindow(QMainWindow):
         self._bounds_status_label.setText(f"{prefix}{self._bounds_check.message}")
         self._bounds_status_label.setStyleSheet(f"color: {color};")
         self._update_plot_controls()
+
+
+def _coerce_fallback_work_area(value: object) -> FallbackWorkArea | None:
+    if isinstance(value, FallbackWorkArea):
+        return value
+    if value == FallbackWorkArea.A3.value:
+        return FallbackWorkArea.A3
+    if value == FallbackWorkArea.A4.value:
+        return FallbackWorkArea.A4
+    return None
+
+
+def _coerce_work_area_orientation(value: object) -> WorkAreaOrientation | None:
+    if isinstance(value, WorkAreaOrientation):
+        return value
+    if value == WorkAreaOrientation.LANDSCAPE.value:
+        return WorkAreaOrientation.LANDSCAPE
+    if value == WorkAreaOrientation.PORTRAIT.value:
+        return WorkAreaOrientation.PORTRAIT
+    return None
 
 
 def _bounds_status_style(status: BoundsStatus) -> tuple[str, str]:

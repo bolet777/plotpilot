@@ -8,8 +8,8 @@ from enum import StrEnum
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_model import get_plotter_model_info
 
-# ISO 216 portrait page sizes for Default (CLI) preview fallback only.
-_FALLBACK_SIZES_MM: dict[str, tuple[float, float]] = {
+# ISO 216 short × long edges (mm) for Default (CLI) fallback only.
+_FALLBACK_PORTRAIT_MM: dict[str, tuple[float, float]] = {
     "A4": (210.0, 297.0),
     "A3": (297.0, 420.0),
 }
@@ -18,6 +18,22 @@ _FALLBACK_SIZES_MM: dict[str, tuple[float, float]] = {
 class FallbackWorkArea(StrEnum):
     A4 = "A4"
     A3 = "A3"
+
+
+class WorkAreaOrientation(StrEnum):
+    PORTRAIT = "Portrait"
+    LANDSCAPE = "Landscape"
+
+
+def resolve_fallback_work_area_dimensions(
+    size: FallbackWorkArea,
+    orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
+) -> tuple[float, float]:
+    """Return physical width × height (mm) for user-selected fallback work area."""
+    short_mm, long_mm = _FALLBACK_PORTRAIT_MM[size.value]
+    if orientation is WorkAreaOrientation.LANDSCAPE:
+        return long_mm, short_mm
+    return short_mm, long_mm
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +69,7 @@ def resolve_preview_work_area(
     plot_settings: PlotSettings,
     *,
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
+    fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
 ) -> PreviewWorkArea | None:
     """Return machine work area from model, or ISO fallback when model is Default (CLI)."""
     if plot_settings.model is not None:
@@ -68,7 +85,7 @@ def resolve_preview_work_area(
         )
 
     key = fallback.value
-    width_mm, height_mm = _FALLBACK_SIZES_MM[key]
+    width_mm, height_mm = resolve_fallback_work_area_dimensions(fallback, fallback_orientation)
     return PreviewWorkArea(
         width_mm=width_mm,
         height_mm=height_mm,
@@ -95,9 +112,14 @@ def resolve_plot_viewport(
     plot_settings: PlotSettings,
     *,
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
+    fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
 ) -> PlotViewport:
     """Machine viewport for geometric clipping (explicit model or user fallback)."""
-    preview = resolve_preview_work_area(plot_settings, fallback=fallback)
+    preview = resolve_preview_work_area(
+        plot_settings,
+        fallback=fallback,
+        fallback_orientation=fallback_orientation,
+    )
     if preview is None:
         msg = "Could not resolve plot viewport."
         raise ValueError(msg)

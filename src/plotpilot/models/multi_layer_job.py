@@ -40,6 +40,7 @@ class MultiLayerPlotJob:
     settings: PlotSettings
     artwork_transform: ArtworkTransform = ArtworkTransform()
     fallback_work_area: str = "A4"
+    fallback_work_area_orientation: str = "Portrait"
     completed_count: int = 0
     message: str = ""
     error_detail: str = ""

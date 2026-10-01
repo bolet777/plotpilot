@@ -8,6 +8,7 @@ from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_model import get_plotter_model_info
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
+    WorkAreaOrientation,
     compute_physical_preview_layout,
     mm_rect_to_px,
     preview_work_area_is_ambiguous,
@@ -68,6 +69,17 @@ def test_a3_fallback_dimensions() -> None:
     assert area is not None
     assert area.width_mm == pytest.approx(297.0)
     assert area.height_mm == pytest.approx(420.0)
+
+
+def test_a4_landscape_fallback_dimensions() -> None:
+    area = resolve_preview_work_area(
+        PlotSettings(),
+        fallback=FallbackWorkArea.A4,
+        fallback_orientation=WorkAreaOrientation.LANDSCAPE,
+    )
+    assert area is not None
+    assert area.width_mm == pytest.approx(297.0)
+    assert area.height_mm == pytest.approx(210.0)
 
 
 def test_shared_transform_maps_svg_and_work_area() -> None:
