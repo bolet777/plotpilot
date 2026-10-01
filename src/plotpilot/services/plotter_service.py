@@ -14,6 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from plotpilot.geometry.plot_viewport import PlotViewportError
+from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_estimate import PlotEstimate, PreviewEstimateResult
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
@@ -30,6 +31,7 @@ from plotpilot.models.pre_plot_estimate import (
     build_pre_plot_estimate_report,
     running_pre_plot_estimate,
 )
+from plotpilot.models.print_margins import PrintMargins
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import PLOT_CANCEL_WAIT, AxiDrawCliBackend
@@ -425,6 +427,7 @@ class PlotterService(QObject):
         artwork_transform: ArtworkTransform | None = None,
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
         fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
+        print_margins: PrintMargins | None = None,
     ) -> str | None:
         """Estimate the final clipped SVG for each layer. Returns an error if refused."""
         if self._plot_in_flight or self._safe_stop_in_flight or self._plot_state.is_active:
@@ -438,6 +441,7 @@ class PlotterService(QObject):
         transform = (
             artwork_transform if artwork_transform is not None else ArtworkTransform.identity()
         )
+        margins = print_margin_model.active_print_margins(print_margins)
         layer_snapshot = list(layers)
         report = running_pre_plot_estimate(len(layer_snapshot))
         self.pre_plot_estimate_changed.emit(report)
@@ -453,6 +457,7 @@ class PlotterService(QObject):
                         transform=transform,
                         fallback=fallback_work_area,
                         fallback_orientation=fallback_work_area_orientation,
+                        print_margins=margins,
                     )
                 except PlotViewportError as exc:
                     results.append((layer.name, None, _short_failure(exc.user_message)))
@@ -480,6 +485,7 @@ class PlotterService(QObject):
         artwork_transform: ArtworkTransform | None = None,
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
         fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
+        print_margins: PrintMargins | None = None,
         layer_index: int | None = None,
         layer_count: int | None = None,
         next_layer_name: str | None = None,
@@ -502,6 +508,7 @@ class PlotterService(QObject):
         transform = (
             artwork_transform if artwork_transform is not None else ArtworkTransform.identity()
         )
+        margins = print_margin_model.active_print_margins(print_margins)
         self._active_plot_settings = plot_settings
         self._plot_in_flight = True
         self._pause_auto_detect_for_hardware()
@@ -527,6 +534,7 @@ class PlotterService(QObject):
                     transform=transform,
                     fallback=fallback_work_area,
                     fallback_orientation=fallback_work_area_orientation,
+                    print_margins=margins,
                 )
             except PlotViewportError as exc:
                 return PlotResult(success=False, message=exc.user_message)

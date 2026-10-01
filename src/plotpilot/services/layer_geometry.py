@@ -9,7 +9,9 @@ from plotpilot.geometry.plot_viewport import (
     clip_document_polylines,
     flatten_document_geometry,
 )
+from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.preview_prepared_service import LayerContentCounts, count_layer_content
@@ -84,21 +86,30 @@ def position_and_clip_geometry(
     *,
     viewport_width_mm: float,
     viewport_height_mm: float,
+    print_margins: PrintMargins | None = None,
 ) -> ClippedLayerGeometry:
-    """Place cached document polylines into the machine viewport."""
+    """Place cached document polylines and clip them to the printable area."""
     if geometry.preparation_error is not None:
         return ClippedLayerGeometry(
             polylines=(),
             path_count=0,
             error_message=geometry.preparation_error,
         )
+    margins = print_margin_model.active_print_margins(print_margins)
     try:
+        area = printable_area_for(viewport_width_mm, viewport_height_mm, margins)
         clipped = clip_document_polylines(
             geometry.polylines,
             transform,
             viewport_width_mm=viewport_width_mm,
             viewport_height_mm=viewport_height_mm,
+            clip_x_min_mm=area.x_mm,
+            clip_y_min_mm=area.y_mm,
+            clip_x_max_mm=area.x_max_mm,
+            clip_y_max_mm=area.y_max_mm,
         )
+    except PrintMarginsError as exc:
+        return ClippedLayerGeometry(polylines=(), path_count=0, error_message=exc.user_message)
     except PlotViewportError as exc:
         return ClippedLayerGeometry(polylines=(), path_count=0, error_message=exc.user_message)
     if not clipped:
@@ -152,6 +163,7 @@ class LayerGeometryCache:
         *,
         viewport_width_mm: float,
         viewport_height_mm: float,
+        print_margins: PrintMargins | None = None,
     ) -> ClippedLayerGeometry:
         """Prepare on cache miss, then clip. For tests and synchronous callers."""
         geometry = self.lookup(id(document), layer.layer_id)
@@ -165,6 +177,7 @@ class LayerGeometryCache:
             transform,
             viewport_width_mm=viewport_width_mm,
             viewport_height_mm=viewport_height_mm,
+            print_margins=print_margins,
         )
 
 
