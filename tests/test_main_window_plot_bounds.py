@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plot_settings import PlotSettings
@@ -121,4 +122,6 @@ def test_explicit_model_sets_preview_physical_layout(qapp, tmp_path: Path) -> No
     window.set_document(load_svg_from_path(svg_path))
     window._settings_service.replace(PlotSettings(model=1))
     window._refresh_preview_work_area()
+    assert QThreadPool.globalInstance().waitForDone(5000)
+    qapp.processEvents()
     assert window._preview.physical_layout is not None
