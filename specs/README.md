@@ -36,6 +36,7 @@ specs/NNN-short-name/
 | 015 | [viewport-positioning-and-clipping](015-viewport-positioning-and-clipping/) | Position/scale artwork; geometric clip before axicli |
 | 016 | [project-session](016-project-session/) | Versioned `.plotpilot` save and reopen |
 | 017 | [svg-golden-baseline](017-svg-golden-baseline/) | SVG golden oracles; known geometry bugs as xfail |
+| 022 | [vpype-evaluation](022-vpype-evaluation/) | Evaluate vpype as geometry engine (spike only; keep current engine) |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 
