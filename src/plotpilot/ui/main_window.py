@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,13 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from plotpilot.models.artwork_transform import (
-    DEFAULT_SCALE_MAX,
-    DEFAULT_SCALE_MIN,
-    ArtworkTransform,
-    scale_percent,
-    transform_from_scale_percent,
-)
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -67,6 +60,7 @@ from plotpilot.services.project_file_service import (
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.ui.artwork_transform_controls import ArtworkTransformControls
 from plotpilot.ui.plot_progress_labels import (
     progress_fraction_label,
     progress_headline,
@@ -224,41 +218,9 @@ class MainWindow(QMainWindow):
         fallback_row.addStretch(1)
         preview_column.addWidget(self._fallback_work_area_row)
 
-        self._position_row = QWidget(central)
-        position_layout = QHBoxLayout(self._position_row)
-        position_layout.setContentsMargins(0, 0, 0, 0)
-        position_layout.addWidget(QLabel("Position", self._position_row))
-        position_layout.addWidget(QLabel("X:", self._position_row))
-        self._artwork_x_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_x_spin.setRange(-2000.0, 2000.0)
-        self._artwork_x_spin.setSuffix(" mm")
-        self._artwork_x_spin.setDecimals(1)
-        self._artwork_x_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
-        position_layout.addWidget(self._artwork_x_spin)
-        position_layout.addWidget(QLabel("Y:", self._position_row))
-        self._artwork_y_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_y_spin.setRange(-2000.0, 2000.0)
-        self._artwork_y_spin.setSuffix(" mm")
-        self._artwork_y_spin.setDecimals(1)
-        self._artwork_y_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
-        position_layout.addWidget(self._artwork_y_spin)
-        position_layout.addSpacing(8)
-        position_layout.addWidget(QLabel("Scale:", self._position_row))
-        self._artwork_scale_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_scale_spin.setRange(DEFAULT_SCALE_MIN * 100.0, DEFAULT_SCALE_MAX * 100.0)
-        self._artwork_scale_spin.setSuffix(" %")
-        self._artwork_scale_spin.setDecimals(0)
-        self._artwork_scale_spin.valueChanged.connect(self._on_artwork_scale_spin_changed)
-        position_layout.addWidget(self._artwork_scale_spin)
-        self._artwork_reset_button = QPushButton("Reset", self._position_row)
-        self._artwork_reset_button.clicked.connect(self._on_artwork_reset)
-        position_layout.addWidget(self._artwork_reset_button)
-        position_layout.addStretch(1)
-        preview_column.addWidget(self._position_row)
-
-        self._artwork_status_label = QLabel("", central)
-        self._artwork_status_label.setWordWrap(True)
-        preview_column.addWidget(self._artwork_status_label)
+        self._artwork_controls = ArtworkTransformControls(central)
+        self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
+        preview_column.addWidget(self._artwork_controls)
 
         self._preview_stack = QStackedWidget(central)
         self._preview_empty_page = QWidget(central)
@@ -295,6 +257,7 @@ class MainWindow(QMainWindow):
         self._preview_stack.addWidget(self._preview_empty_page)
         self._preview_stack.addWidget(self._preview)
         self._sync_artwork_controls_from_preview()
+        self._refresh_artwork_transform_panel()
         preview_column.addWidget(self._preview_stack, stretch=1)
 
         preview_column_host = QWidget(central)
@@ -666,7 +629,7 @@ class MainWindow(QMainWindow):
         self._plot_settings.set_plotting_active(settings_locked)
         transform_locked = plot_active or job_active
         self._preview.set_transform_controls_enabled(not transform_locked)
-        self._position_row.setEnabled(not transform_locked)
+        self._artwork_controls.setEnabled(not transform_locked)
         self._open_svg_action.setEnabled(not job_active)
         has_document = self._document is not None
         self._save_project_action.setEnabled(has_document and not job_active)
@@ -1207,12 +1170,13 @@ class MainWindow(QMainWindow):
             error_message=result.clipped.error_message,
             status_lines=result.status_lines,
         )
-        self._refresh_artwork_status()
+        self._refresh_artwork_transform_panel()
 
     def _on_plot_settings_changed(self) -> None:
         self._mark_project_dirty()
         self._sync_fallback_work_area_visibility()
         self._refresh_bounds_status()
+        self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
     def _on_fallback_work_area_changed(self, _index: int) -> None:
@@ -1221,6 +1185,7 @@ class MainWindow(QMainWindow):
             return
         self._settings_service.set_preview_fallback_work_area(area)
         self._mark_project_dirty()
+        self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
     def _on_fallback_work_area_orientation_changed(self, _index: int) -> None:
@@ -1231,6 +1196,7 @@ class MainWindow(QMainWindow):
             return
         self._settings_service.set_preview_fallback_work_area_orientation(orientation)
         self._mark_project_dirty()
+        self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
     def _sync_fallback_work_area_visibility(self) -> None:
@@ -1247,38 +1213,39 @@ class MainWindow(QMainWindow):
             return
         self._refresh_prepared_preview()
 
-    def _refresh_artwork_status(self) -> None:
-        transform = self._preview.artwork_transform
+    def _refresh_artwork_transform_panel(self) -> None:
         work_area = resolve_preview_work_area(
             self._settings_service.plot_settings,
             fallback=self._settings_service.preview_fallback_work_area,
             fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if work_area is None:
-            self._artwork_status_label.setText("")
+            self._artwork_controls.set_plot_area_text("")
+            self._artwork_controls.set_status_lines([])
             return
-        lines = [
-            f"Artwork — X: {transform.x_mm:.1f} mm, Y: {transform.y_mm:.1f} mm, "
-            f"Scale: {scale_percent(transform):.0f}%",
-            f"Plot area: {work_area.label}",
-        ]
+        self._artwork_controls.set_work_area_dimensions(
+            work_area.width_mm,
+            work_area.height_mm,
+        )
         if work_area.from_fallback:
-            lines.append("User-defined work area (not verified hardware).")
+            orientation = self._settings_service.preview_fallback_work_area_orientation
+            plot_line = (
+                f"Plot area: {self._settings_service.preview_fallback_work_area.value} "
+                f"{orientation.value} — {work_area.label.split(' — ', 1)[-1]}"
+            )
+        else:
+            plot_line = f"Plot area: {work_area.label}"
+        status_lines: list[str] = []
+        if work_area.from_fallback:
+            status_lines.append("User-defined work area (not verified hardware).")
         for line in self._preview.status_lines:
-            if line not in lines:
-                lines.append(line)
-        self._artwork_status_label.setText("\n".join(lines))
+            if line not in status_lines and line != plot_line:
+                status_lines.append(line)
+        self._artwork_controls.set_plot_area_text(plot_line)
+        self._artwork_controls.set_status_lines(status_lines)
 
     def _sync_artwork_controls_from_preview(self) -> None:
-        transform = self._preview.artwork_transform
-        for spin, value in (
-            (self._artwork_x_spin, transform.x_mm),
-            (self._artwork_y_spin, transform.y_mm),
-            (self._artwork_scale_spin, scale_percent(transform)),
-        ):
-            spin.blockSignals(True)
-            spin.setValue(value)
-            spin.blockSignals(False)
+        self._artwork_controls.set_transform(self._preview.artwork_transform)
 
     def _set_artwork_transform(
         self,
@@ -1299,26 +1266,10 @@ class MainWindow(QMainWindow):
             self._schedule_prepared_preview_refresh()
             self._mark_project_dirty()
 
-    def _on_artwork_position_spin_changed(self, _value: float) -> None:
-        moved = ArtworkTransform(
-            x_mm=self._artwork_x_spin.value(),
-            y_mm=self._artwork_y_spin.value(),
-            scale=self._preview.artwork_transform.scale,
-        )
-        self._set_artwork_transform(moved)
-
-    def _on_artwork_scale_spin_changed(self, value: float) -> None:
-        current = self._preview.artwork_transform
-        try:
-            scaled = transform_from_scale_percent(current, value)
-        except ValueError:
+    def _on_artwork_controls_changed(self, transform: ArtworkTransform) -> None:
+        if transform == self._preview.artwork_transform:
             return
-        self._set_artwork_transform(
-            ArtworkTransform(x_mm=current.x_mm, y_mm=current.y_mm, scale=scaled.scale),
-        )
-
-    def _on_artwork_reset(self) -> None:
-        self._set_artwork_transform(ArtworkTransform.identity())
+        self._set_artwork_transform(transform)
 
     def _refresh_bounds_status(self) -> None:
         document = self._document
