@@ -152,6 +152,8 @@ class MainWindow(QMainWindow):
         self._plotter_service.status_changed.connect(self._apply_plotter_status)
         self._plotter_service.plot_state_changed.connect(self._apply_plot_state)
         self._plotter_service.plot_progress_changed.connect(self._apply_plot_progress)
+        self._plotter_service.pre_plot_estimate_changed.connect(self._apply_pre_plot_estimate)
+        self._plotter_service.manual_command_finished.connect(self._on_manual_command_finished)
         self._multi_layer_service = MultiLayerPlotService(self._plotter_service, parent=self)
         self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
         self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
@@ -303,6 +305,21 @@ class MainWindow(QMainWindow):
         self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
         plotter_buttons.addWidget(self._pen_down_button)
 
+        self._home_button = QPushButton("Home", central)
+        self._home_button.setToolTip(
+            "Return to the position where the motors were enabled (walk_home). "
+            "Does not lower the pen.",
+        )
+        self._home_button.clicked.connect(self._on_home)
+        plotter_buttons.addWidget(self._home_button)
+
+        self._motors_off_button = QPushButton("Motors Off", central)
+        self._motors_off_button.setToolTip(
+            "Disable the XY motors (disable_xy). Does not move the carriage or lower the pen.",
+        )
+        self._motors_off_button.clicked.connect(self._on_motors_off)
+        plotter_buttons.addWidget(self._motors_off_button)
+
         self._plotter_refresh_button = QPushButton("Refresh", central)
         self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
         plotter_buttons.addWidget(self._plotter_refresh_button)
@@ -325,8 +342,20 @@ class MainWindow(QMainWindow):
         self._multi_continue_button.setVisible(False)
         plotter_buttons.addWidget(self._multi_continue_button)
 
+        self._estimate_button = QPushButton("Estimate", central)
+        self._estimate_button.setToolTip(
+            "Estimate drawing time from the final clipped SVG (axicli -v -T). "
+            "Pen-change pauses are not included.",
+        )
+        self._estimate_button.clicked.connect(self._on_estimate_plot)
+        plotter_buttons.addWidget(self._estimate_button)
+
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
+
+        self._estimate_label = QLabel("", central)
+        self._estimate_label.setWordWrap(True)
+        root_layout.addWidget(self._estimate_label)
 
         self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
         self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
@@ -597,8 +626,20 @@ class MainWindow(QMainWindow):
             and not job_active
             and not stopping
         )
+        manual_busy = self._plotter_service.manual_command_active
+        pen_ok = pen_ok and not manual_busy
         self._pen_up_button.setEnabled(pen_ok)
         self._pen_down_button.setEnabled(pen_ok)
+        self._home_button.setEnabled(pen_ok)
+        self._motors_off_button.setEnabled(pen_ok)
+        self._estimate_button.setEnabled(
+            self._document is not None
+            and (layer is not None or len(checked) >= 1)
+            and not plot_active
+            and not job_active
+            and not stopping
+            and not manual_busy
+        )
         settings_locked = plot_active or job_active
         self._plot_settings.set_plotting_active(settings_locked)
         transform_locked = plot_active or job_active
@@ -651,6 +692,47 @@ class MainWindow(QMainWindow):
             if 0 <= row < len(self._layers):
                 selected.append(self._layers[row])
         return selected
+
+    def _on_home(self) -> None:
+        error = self._plotter_service.home()
+        if error:
+            self._plotter_message_label.setText(error)
+        self._update_plot_controls()
+
+    def _on_motors_off(self) -> None:
+        error = self._plotter_service.motors_off()
+        if error:
+            self._plotter_message_label.setText(error)
+        self._update_plot_controls()
+
+    def _on_manual_command_finished(self, _name: str, _result: object) -> None:
+        self._update_plot_controls()
+
+    def _on_estimate_plot(self) -> None:
+        document = self._document
+        if document is None:
+            return
+        checked = self._checked_layers()
+        if checked:
+            layers = checked
+        else:
+            selected = self._current_layer()
+            layers = [selected] if selected is not None else []
+        error = self._plotter_service.request_pre_plot_estimate(
+            document,
+            layers,
+            plot_settings=self._settings_service.plot_settings,
+            artwork_transform=self._preview.artwork_transform,
+            fallback_work_area=self._settings_service.preview_fallback_work_area,
+        )
+        if error:
+            self._estimate_label.setText(error)
+        self._update_plot_controls()
+
+    def _apply_pre_plot_estimate(self, report: object) -> None:
+        summary = getattr(report, "summary", "")
+        self._estimate_label.setText(str(summary))
+        self._update_plot_controls()
 
     def _on_plot_selected_layer(self) -> None:
         if self._plotter_service.plot_state.is_active or self._multi_layer_service.job.is_active:

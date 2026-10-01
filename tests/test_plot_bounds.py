@@ -27,14 +27,24 @@ _OVERSIZE = (
 )
 
 
-def test_a4_portrait_fits_model_1() -> None:
+def test_a4_portrait_exceeds_model_1_without_auto_rotate() -> None:
     result = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1))
+    assert result.status is BoundsStatus.OUT_OF_BOUNDS
+    assert result.would_fit_if_rotated
+    assert result.document_width_mm == 210
+    assert result.document_height_mm == 297
+    assert "preview orientation" in result.message
+
+
+def test_a4_portrait_fits_model_1_only_with_auto_rotate() -> None:
+    result = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1), auto_rotate=True)
     assert result.status is BoundsStatus.OK
 
 
-def test_a3_sheet_fits_model_2() -> None:
+def test_a3_sheet_exceeds_model_2_without_auto_rotate() -> None:
     result = check_plot_bounds(_A3_SHEET, PlotSettings(model=2))
-    assert result.status is BoundsStatus.OK
+    assert result.status is BoundsStatus.OUT_OF_BOUNDS
+    assert result.would_fit_if_rotated
 
 
 def test_inch_and_px_documents_parse() -> None:
@@ -80,4 +90,5 @@ def test_portrait_landscape_consistency() -> None:
     ok_landscape = check_plot_bounds(_A4_LANDSCAPE, PlotSettings(model=1))
     ok_portrait = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1))
     assert ok_landscape.status is BoundsStatus.OK
-    assert ok_portrait.status is BoundsStatus.OK
+    assert ok_portrait.status is BoundsStatus.OUT_OF_BOUNDS
+    assert ok_portrait.would_fit_if_rotated

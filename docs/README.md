@@ -11,7 +11,7 @@
 
 Each capability is specified under `specs/NNN-slug/` (`spec.md`, `plan.md`, `tasks.md`, …).
 
-- [Feature index](../specs/README.md) — slices 001–017
+- [Feature index](../specs/README.md) — slices 001–023
 
 ### macOS app bundle
 

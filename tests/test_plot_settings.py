@@ -8,6 +8,7 @@ import pytest
 
 from plotpilot.models.plot_settings import (
     REORDERING_BASIC,
+    REORDERING_STRICT,
     PlotSettings,
     PlotSettingsValidationError,
     build_axicli_plot_argv,
@@ -17,12 +18,15 @@ from plotpilot.models.plot_settings import (
 def test_default_plot_settings_have_no_overrides() -> None:
     settings = PlotSettings()
     assert not settings.has_overrides
+    assert settings.path_reordering == REORDERING_STRICT
+    assert not settings.const_speed
     assert not settings.optimize_path_order
 
 
-def test_default_argv_has_no_setting_flags() -> None:
+def test_default_argv_is_explicit() -> None:
     argv = build_axicli_plot_argv("axicli", Path("layer.svg"))
-    assert argv == ["axicli", "layer.svg", "-m", "plot", "-c", "1"]
+    assert argv == ["axicli", "layer.svg", "-m", "plot", "-c", "1", "-G", "4", "-N"]
+    assert all(flag not in argv for flag in ("-s", "-S", "-a", "-u", "-d", "-L", "-C"))
 
 
 def test_pen_down_speed_flag() -> None:
@@ -70,13 +74,14 @@ def test_path_reordering_flag_when_enabled() -> None:
     assert "-G" in argv and argv[argv.index("-G") + 1] == "1"
 
 
-def test_disabled_optimization_omits_reordering_flag() -> None:
+def test_driver_default_ordering_omits_reordering_flag() -> None:
     argv = build_axicli_plot_argv(
         "axicli",
         Path("x.svg"),
         PlotSettings(path_reordering=None),
     )
     assert "-G" not in argv
+    assert "-N" in argv
 
 
 def test_argv_flag_order_is_deterministic() -> None:
@@ -108,6 +113,7 @@ def test_argv_flag_order_is_deterministic() -> None:
         "3",
         "-G",
         "1",
+        "-N",
     ]
 
 
@@ -128,8 +134,10 @@ def test_multiple_overrides_combine() -> None:
         (PlotSettings(pen_up_speed=101), "Pen-up"),
         (PlotSettings(acceleration=0), "Acceleration"),
         (PlotSettings(model=8), "Model"),
-        (PlotSettings(path_reordering=2), "Path reordering"),
-        (PlotSettings(path_reordering=0), "Path reordering"),
+        (PlotSettings(path_reordering=0), "Path ordering"),
+        (PlotSettings(path_reordering=3), "Path ordering"),
+        (PlotSettings(pen_pos_up=101), "Pen-up position"),
+        (PlotSettings(pen_pos_down=-1), "Pen-down position"),
     ],
 )
 def test_invalid_settings_rejected(settings: PlotSettings, message: str) -> None:

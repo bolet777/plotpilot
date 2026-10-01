@@ -61,6 +61,10 @@ def test_settings_disabled_while_plotting(qapp, monkeypatch) -> None:
     window._on_plot_selected_layer()
     wait_for_plot_started(window.plotter_service)
     assert not window._plot_settings._pen_down_slider.isEnabled()  # noqa: SLF001
+    assert not window._plot_settings._path_order_combo.isEnabled()  # noqa: SLF001
+    assert not window._home_button.isEnabled()
+    assert not window._motors_off_button.isEnabled()
+    assert not window._estimate_button.isEnabled()
     window.plotter_service.cancel_plot()
     wait_for_plot_finished(window.plotter_service)
     assert window._plot_settings._pen_down_slider.isEnabled()  # noqa: SLF001
@@ -99,15 +103,17 @@ def test_changing_slider_does_not_start_plot(qapp) -> None:
     assert fake.plot_paths == []
 
 
-def test_optimize_checkbox_reflects_settings(qapp) -> None:
+def test_path_order_combo_reflects_settings(qapp) -> None:
     window, _fake, settings = _window(qapp)
     settings.replace(PlotSettings(path_reordering=REORDERING_BASIC))
-    assert window._plot_settings._optimize_checkbox.isChecked()  # noqa: SLF001
+    combo = window._plot_settings._path_order_combo  # noqa: SLF001
+    assert combo.currentData() == REORDERING_BASIC
 
 
-def test_toggling_optimize_does_not_start_plot(qapp) -> None:
+def test_changing_path_order_does_not_start_plot(qapp) -> None:
     window, fake, _settings = _window(qapp)
-    window._plot_settings._optimize_checkbox.setChecked(True)  # noqa: SLF001
+    combo = window._plot_settings._path_order_combo  # noqa: SLF001
+    combo.setCurrentIndex(combo.findData(REORDERING_BASIC))
     assert fake.plot_paths == []
 
 

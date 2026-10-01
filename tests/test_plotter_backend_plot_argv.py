@@ -46,6 +46,9 @@ def test_plot_svg_uses_build_argv(tmp_path: Path, monkeypatch) -> None:
         "30",
         "-a",
         "60",
+        "-G",
+        "4",
+        "-N",
     ]
 
 
@@ -72,4 +75,4 @@ def test_plot_svg_includes_reordering_flag(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(backend, "_resolve_cli", lambda: "axicli")
     result = backend.plot_svg(svg, settings=PlotSettings(path_reordering=1))
     assert result.success
-    assert captured[0][-2:] == ["-G", "1"]
+    assert captured[0][-3:] == ["-G", "1", "-N"]

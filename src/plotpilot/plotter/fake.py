@@ -52,6 +52,7 @@ class FakePlotterBackend:
     estimate_result: PlotEstimate | None = None
     estimate_paths: list[Path] = field(default_factory=list)
     estimate_settings_used: list[PlotSettings | None] = field(default_factory=list)
+    estimate_file_contents: list[str] = field(default_factory=list)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def detect(self) -> PlotterStatus:
@@ -155,4 +156,6 @@ class FakePlotterBackend:
     ) -> PlotEstimate | None:
         self.estimate_paths.append(svg_path)
         self.estimate_settings_used.append(settings)
+        if svg_path.exists():
+            self.estimate_file_contents.append(svg_path.read_text(encoding="utf-8"))
         return self.estimate_result
