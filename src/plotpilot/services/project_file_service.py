@@ -8,8 +8,13 @@ from typing import Any
 
 from plotpilot.models.artwork_transform import ArtworkTransform, ArtworkTransformError
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
+from plotpilot.models.print_margins import PrintMargins, PrintMarginsError
 from plotpilot.models.project_session import ProjectSession
-from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
+from plotpilot.services.preview_work_area import (
+    FallbackWorkArea,
+    WorkAreaOrientation,
+    resolve_preview_work_area,
+)
 
 FORMAT_ID = "plotpilot-project"
 SUPPORTED_VERSION = 1
@@ -76,6 +81,10 @@ def session_to_document(
         "preview": {
             "fallback_work_area": session.fallback_work_area.value,
             "fallback_work_area_orientation": session.fallback_work_area_orientation.value,
+        },
+        "print": {
+            "margin_horizontal_mm": session.print_margins.horizontal_mm,
+            "margin_vertical_mm": session.print_margins.vertical_mm,
         },
     }
 
@@ -163,6 +172,12 @@ def read_project_file(project_file: Path) -> ProjectSession:
 
     plot_settings = _parse_plot_settings(data.get("plot_settings"))
     fallback, fallback_orientation = _parse_preview(data.get("preview"))
+    print_margins = _parse_print_margins(
+        data.get("print"),
+        plot_settings=plot_settings,
+        fallback=fallback,
+        fallback_orientation=fallback_orientation,
+    )
 
     return ProjectSession(
         svg_path=svg_path,
@@ -171,6 +186,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         plot_settings=plot_settings,
         fallback_work_area=fallback,
         fallback_work_area_orientation=fallback_orientation,
+        print_margins=print_margins,
     )
 
 
@@ -223,6 +239,53 @@ def _parse_preview(
     else:
         orientation = WorkAreaOrientation.PORTRAIT
     return fallback, orientation
+
+
+def _parse_print_margins(
+    block: object,
+    *,
+    plot_settings: PlotSettings,
+    fallback: FallbackWorkArea,
+    fallback_orientation: WorkAreaOrientation,
+) -> PrintMargins:
+    """Missing margins stay at 10 mm. Impossible values are a project error."""
+    if block is None:
+        margins = PrintMargins()
+    elif not isinstance(block, dict):
+        raise ProjectFileError("Print margins in this project file are invalid.")
+    else:
+        try:
+            margins = PrintMargins(
+                horizontal_mm=_required_float(block.get("margin_horizontal_mm", 10.0)),
+                vertical_mm=_required_float(block.get("margin_vertical_mm", 10.0)),
+            )
+            margins.validate()
+        except (TypeError, ValueError, PrintMarginsError) as exc:
+            raise ProjectFileError("Print margins in this project file are invalid.") from exc
+
+    work = resolve_preview_work_area(
+        plot_settings,
+        fallback=fallback,
+        fallback_orientation=fallback_orientation,
+    )
+    if work is None:
+        raise ProjectFileError("Could not resolve the project work area for print margins.")
+    try:
+        margins.validate_for_work_area(work.width_mm, work.height_mm)
+    except PrintMarginsError as exc:
+        raise ProjectFileError(exc.user_message) from exc
+    return margins
+
+
+def _required_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        msg = "not a number"
+        raise TypeError(msg)
+    try:
+        return float(value)
+    except ValueError as exc:
+        msg = "not a number"
+        raise TypeError(msg) from exc
 
 
 def _legacy_path_reordering(block: dict[str, Any]) -> int | None:

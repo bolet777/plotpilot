@@ -7,8 +7,15 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
+from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
+from plotpilot.models.print_margins import (
+    PrintableArea,
+    PrintMargins,
+    PrintMarginsError,
+    printable_area_for,
+)
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.layer_geometry import (
@@ -40,6 +47,7 @@ class InteractivePreview:
     clipped: ClippedLayerGeometry
     status_lines: tuple[str, ...]
     work_area: PreviewWorkArea | None
+    printable_area: PrintableArea | None = None
 
 
 def compute_interactive_preview(
@@ -51,6 +59,7 @@ def compute_interactive_preview(
     plot_settings: PlotSettings,
     fallback: FallbackWorkArea,
     fallback_orientation: WorkAreaOrientation,
+    print_margins: PrintMargins | None = None,
 ) -> InteractivePreview:
     """Flatten only when *cached_geometry* is missing, then clip. No Qt."""
     geometry = cached_geometry
@@ -64,12 +73,18 @@ def compute_interactive_preview(
         fallback=fallback,
         fallback_orientation=fallback_orientation,
     )
+    margins = print_margin_model.active_print_margins(print_margins)
     clipped = position_and_clip_geometry(
         geometry,
         transform,
         viewport_width_mm=viewport.width_mm,
         viewport_height_mm=viewport.height_mm,
+        print_margins=margins,
     )
+    try:
+        printable = printable_area_for(viewport.width_mm, viewport.height_mm, margins)
+    except PrintMarginsError:
+        printable = None
     path_count = None if clipped.error_message is not None else clipped.path_count
     status = preview_status_lines(
         geometry.content_counts,
@@ -89,6 +104,7 @@ def compute_interactive_preview(
             fallback=fallback,
             fallback_orientation=fallback_orientation,
         ),
+        printable_area=printable,
     )
 
 

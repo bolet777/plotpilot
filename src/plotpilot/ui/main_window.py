@@ -43,6 +43,12 @@ from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plot_progress import PlotProgress
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
+from plotpilot.models.print_margins import (
+    PrintMargins,
+    PrintMarginsError,
+    max_symmetric_margin_mm,
+    printable_area_for,
+)
 from plotpilot.models.project_session import ProjectSession
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
@@ -297,6 +303,7 @@ class MainWindow(QMainWindow):
 
         self._artwork_controls = ArtworkTransformControls(content)
         self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
+        self._artwork_controls.margins_changed.connect(self._on_print_margins_changed)
         preview_column.addWidget(self._artwork_controls)
 
         self._preview_stack = QStackedWidget(content)
@@ -487,6 +494,7 @@ class MainWindow(QMainWindow):
         self._apply_multi_layer_job(self._multi_layer_service.job)
         self._refresh_bounds_status()
         self._sync_fallback_work_area_visibility()
+        self._sync_print_margin_controls()
         self._refresh_preview_work_area()
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
@@ -811,6 +819,7 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
             fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            print_margins=self._settings_service.print_margins,
         )
         if error:
             self._estimate_label.setText(error)
@@ -846,6 +855,7 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
             fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            print_margins=self._settings_service.print_margins,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -885,6 +895,7 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
             fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            print_margins=self._settings_service.print_margins,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -954,8 +965,10 @@ class MainWindow(QMainWindow):
             session.plot_settings,
             session.fallback_work_area,
             session.fallback_work_area_orientation,
+            print_margins=session.print_margins,
         )
         self._sync_fallback_combo_from_service()
+        self._sync_print_margin_controls()
         self._apply_document(document, reset_transform=False)
         self._set_artwork_transform(session.artwork_transform, mark_dirty=False)
         self._restore_checked_layer_ids(session.checked_layer_ids)
@@ -1000,6 +1013,7 @@ class MainWindow(QMainWindow):
         if self._settings_service.project_session_active:
             self._settings_service.end_project_session()
             self._sync_fallback_combo_from_service()
+            self._sync_print_margin_controls()
         self._project_file_path = None
         self._project_dirty = False
         self._update_window_title()
@@ -1016,6 +1030,7 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
             fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            print_margins=self._settings_service.print_margins,
         )
 
     def _save_project(self) -> None:
@@ -1046,6 +1061,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.plot_settings,
                 self._settings_service.preview_fallback_work_area,
                 self._settings_service.preview_fallback_work_area_orientation,
+                print_margins=self._settings_service.print_margins,
             )
         self._save_project_at_path(path)
 
@@ -1216,6 +1232,7 @@ class MainWindow(QMainWindow):
         plot_settings = self._settings_service.plot_settings
         fallback = self._settings_service.preview_fallback_work_area
         fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
+        print_margins = self._settings_service.print_margins
         cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
         def operation() -> InteractivePreview:
@@ -1227,6 +1244,7 @@ class MainWindow(QMainWindow):
                 plot_settings=plot_settings,
                 fallback=fallback,
                 fallback_orientation=fallback_orientation,
+                print_margins=print_margins,
             )
 
         self._preview_compute.submit(operation)
@@ -1259,6 +1277,7 @@ class MainWindow(QMainWindow):
                 svg_width_mm=result.page_width_mm,
                 svg_height_mm=result.page_height_mm,
                 work_area=result.work_area,
+                printable_area=result.printable_area,
             )
         else:
             self._preview.set_work_area_overlay(
@@ -1277,6 +1296,7 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
         self._sync_fallback_work_area_visibility()
         self._refresh_bounds_status()
+        self._apply_margin_limits()
         self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
@@ -1286,6 +1306,7 @@ class MainWindow(QMainWindow):
             return
         self._settings_service.set_preview_fallback_work_area(area)
         self._mark_project_dirty()
+        self._apply_margin_limits()
         self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
@@ -1297,6 +1318,7 @@ class MainWindow(QMainWindow):
             return
         self._settings_service.set_preview_fallback_work_area_orientation(orientation)
         self._mark_project_dirty()
+        self._apply_margin_limits()
         self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
@@ -1322,6 +1344,7 @@ class MainWindow(QMainWindow):
         )
         if work_area is None:
             self._artwork_controls.set_plot_area_text("")
+            self._artwork_controls.set_printable_text("Printable: —")
             self._artwork_controls.set_status_lines([])
             return
         self._artwork_controls.set_work_area_dimensions(
@@ -1343,7 +1366,58 @@ class MainWindow(QMainWindow):
             if line not in status_lines and line != plot_line:
                 status_lines.append(line)
         self._artwork_controls.set_plot_area_text(plot_line)
+        self._artwork_controls.set_printable_text(self._printable_size_text(work_area))
         self._artwork_controls.set_status_lines(status_lines)
+
+    def _printable_size_text(self, work_area: object) -> str:
+        width = getattr(work_area, "width_mm", None)
+        height = getattr(work_area, "height_mm", None)
+        if not isinstance(width, float) or not isinstance(height, float):
+            return "Printable: —"
+        try:
+            area = printable_area_for(width, height, self._settings_service.print_margins)
+        except PrintMarginsError:
+            return "Printable: —"
+        return f"Printable: {area.size_label()}"
+
+    def _sync_print_margin_controls(self) -> None:
+        self._artwork_controls.set_print_margins(self._settings_service.print_margins)
+        self._apply_margin_limits()
+        self._refresh_artwork_transform_panel()
+
+    def _apply_margin_limits(self) -> None:
+        work_area = resolve_preview_work_area(
+            self._settings_service.plot_settings,
+            fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
+        )
+        if work_area is None:
+            return
+        clamped = self._artwork_controls.set_margin_ranges(
+            max_symmetric_margin_mm(work_area.width_mm),
+            max_symmetric_margin_mm(work_area.height_mm),
+        )
+        if clamped is None:
+            return
+        self._settings_service.set_print_margins(clamped)
+        self._mark_project_dirty()
+        self._schedule_prepared_preview_refresh()
+
+    def _on_print_margins_changed(self, margins: object) -> None:
+        if not isinstance(margins, PrintMargins):
+            return
+        try:
+            margins.validate()
+        except PrintMarginsError:
+            return
+        if margins == self._settings_service.print_margins:
+            self._refresh_artwork_transform_panel()
+            return
+        self._settings_service.set_print_margins(margins)
+        self._estimate_label.setText("")
+        self._refresh_artwork_transform_panel()
+        self._schedule_prepared_preview_refresh()
+        self._mark_project_dirty()
 
     def _sync_artwork_controls_from_preview(self) -> None:
         self._artwork_controls.set_transform(self._preview.artwork_transform)

@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QFont,
     QMouseEvent,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QPolygonF,
@@ -19,6 +20,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.print_margins import PrintableArea
 from plotpilot.services.preview_work_area import (
     PhysicalPreviewLayout,
     PreviewWorkArea,
@@ -77,6 +79,7 @@ class _PhysicalPreviewState:
     svg_width_mm: float
     svg_height_mm: float
     work_area: PreviewWorkArea
+    printable_area: PrintableArea | None = None
 
 
 class LayerPreviewWidget(QWidget):
@@ -106,6 +109,7 @@ class LayerPreviewWidget(QWidget):
         self._clipped_polygons: list[QPolygonF] = []
         self._plot_pixmap: QPixmap | None = None
         self._plot_pixmap_key: tuple[int, int, int, int] | None = None
+        self._painted_printable_boundary = False
 
     @property
     def last_svg(self) -> str | None:
@@ -235,14 +239,25 @@ class LayerPreviewWidget(QWidget):
             self._dragging = False
             self._drag_last_px = None
 
+    @property
+    def printable_area(self) -> PrintableArea | None:
+        if self._physical is None:
+            return None
+        return self._physical.printable_area
+
+    @property
+    def painted_printable_boundary(self) -> bool:
+        return self._painted_printable_boundary
+
     def set_work_area_overlay(
         self,
         *,
         svg_width_mm: float,
         svg_height_mm: float,
         work_area: PreviewWorkArea | None,
+        printable_area: PrintableArea | None = None,
     ) -> None:
-        """Configure mm-space document size and plotter boundary."""
+        """Configure mm-space document size, machine boundary, and printable inset."""
         if work_area is None or svg_width_mm <= 0 or svg_height_mm <= 0:
             self._physical = None
         else:
@@ -250,6 +265,7 @@ class LayerPreviewWidget(QWidget):
                 svg_width_mm=svg_width_mm,
                 svg_height_mm=svg_height_mm,
                 work_area=work_area,
+                printable_area=printable_area,
             )
         self.update()
 
@@ -279,6 +295,7 @@ class LayerPreviewWidget(QWidget):
         )
 
     def paintEvent(self, _event) -> None:  # noqa: N802
+        self._painted_printable_boundary = False
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#e8e8e8"))
 
@@ -442,6 +459,7 @@ class LayerPreviewWidget(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(work_target)
+            self._paint_printable_boundary(painter, scale_px)
 
             label = self._physical.work_area.label if self._physical else ""
             if label:
@@ -450,12 +468,34 @@ class LayerPreviewWidget(QWidget):
                 font.setPointSize(max(font.pointSize() - 1, 8))
                 painter.setFont(font)
                 label_rect = QRectF(wx + 4.0, wy + 2.0, ww - 8.0, 16.0)
-            painter.drawText(
-                label_rect,
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-                label,
-            )
+                painter.drawText(
+                    label_rect,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
+                    label,
+                )
         painter.restore()
+
+    def _paint_printable_boundary(self, painter: QPainter, scale_px: float) -> None:
+        """Solid inset rectangle. Color comes from the palette so light and dark both read."""
+        if self._physical is None or self._physical.printable_area is None or scale_px <= 0:
+            return
+        area = self._physical.printable_area
+        if area.width_mm <= 0 or area.height_mm <= 0:
+            return
+        rect = QRectF(
+            area.x_mm * scale_px,
+            area.y_mm * scale_px,
+            area.width_mm * scale_px,
+            area.height_mm * scale_px,
+        )
+        pen = QPen(self.palette().color(QPalette.ColorRole.Text))
+        pen.setStyle(Qt.PenStyle.SolidLine)
+        pen.setWidthF(2.0)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+        self._painted_printable_boundary = True
 
     def _plot_pixmap_for(
         self,

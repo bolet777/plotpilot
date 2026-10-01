@@ -9,6 +9,7 @@ from plotpilot.models.plot_settings import (
     PlotSettings,
     PlotSettingsValidationError,
 )
+from plotpilot.models.print_margins import PrintMargins, PrintMarginsError
 from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 
 ORGANIZATION = "PlotPilot"
@@ -16,6 +17,8 @@ APPLICATION = "PlotPilot"
 
 _KEY_PREVIEW_FALLBACK = "preview/fallback_work_area"
 _KEY_PREVIEW_FALLBACK_ORIENTATION = "preview/fallback_work_area_orientation"
+_KEY_MARGIN_HORIZONTAL = "print/margin_horizontal_mm"
+_KEY_MARGIN_VERTICAL = "print/margin_vertical_mm"
 _KEY_PEN_DOWN = "plot/pen_down_speed"
 _KEY_PEN_UP = "plot/pen_up_speed"
 _KEY_ACCEL = "plot/acceleration"
@@ -47,6 +50,7 @@ class SettingsService(QObject):
         self._project_session_active = False
         self._session_fallback: FallbackWorkArea | None = None
         self._session_fallback_orientation: WorkAreaOrientation | None = None
+        self._session_margins: PrintMargins | None = None
 
     @property
     def plot_settings(self) -> PlotSettings:
@@ -65,8 +69,24 @@ class SettingsService(QObject):
         return self._load_fallback_work_area_orientation()
 
     @property
+    def print_margins(self) -> PrintMargins:
+        if self._session_margins is not None:
+            return self._session_margins
+        return self._load_print_margins()
+
+    @property
     def project_session_active(self) -> bool:
         return self._project_session_active
+
+    def set_print_margins(self, margins: PrintMargins) -> None:
+        """Store margins on the project session, or in QSettings for a plain SVG."""
+        margins.validate()
+        if self._project_session_active:
+            self._session_margins = margins
+            return
+        self._settings.setValue(_KEY_MARGIN_HORIZONTAL, margins.horizontal_mm)
+        self._settings.setValue(_KEY_MARGIN_VERTICAL, margins.vertical_mm)
+        self._settings.sync()
 
     def set_preview_fallback_work_area(self, value: FallbackWorkArea) -> None:
         if self._project_session_active:
@@ -87,20 +107,25 @@ class SettingsService(QObject):
         settings: PlotSettings,
         fallback: FallbackWorkArea,
         fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
+        print_margins: PrintMargins | None = None,
     ) -> None:
         """Apply project-owned settings without writing global QSettings."""
         settings.validate()
+        margins = self.print_margins if print_margins is None else print_margins
+        margins.validate()
         self._project_session_active = True
         self._session_fallback = fallback
         self._session_fallback_orientation = fallback_orientation
+        self._session_margins = margins
         self._current = settings
         self.settings_changed.emit(settings)
 
     def end_project_session(self) -> None:
-        """Return to global QSettings-backed plot settings and fallback."""
+        """Return to global QSettings-backed plot settings, fallback, and margins."""
         self._project_session_active = False
         self._session_fallback = None
         self._session_fallback_orientation = None
+        self._session_margins = None
         self._current = self._load()
         self.settings_changed.emit(self._current)
 
@@ -184,6 +209,23 @@ class SettingsService(QObject):
             return FallbackWorkArea.A3
         return FallbackWorkArea.A4
 
+    def _load_print_margins(self) -> PrintMargins:
+        if not self._settings.contains(_KEY_MARGIN_HORIZONTAL) and not self._settings.contains(
+            _KEY_MARGIN_VERTICAL
+        ):
+            return PrintMargins()
+        horizontal = _read_optional_float(self._settings, _KEY_MARGIN_HORIZONTAL, default=10.0)
+        vertical = _read_optional_float(self._settings, _KEY_MARGIN_VERTICAL, default=10.0)
+        margins = PrintMargins(horizontal_mm=horizontal, vertical_mm=vertical)
+        try:
+            margins.validate()
+        except PrintMarginsError:
+            self._settings.remove(_KEY_MARGIN_HORIZONTAL)
+            self._settings.remove(_KEY_MARGIN_VERTICAL)
+            self._settings.sync()
+            return PrintMargins()
+        return margins
+
     def _load_fallback_work_area_orientation(self) -> WorkAreaOrientation:
         if not self._settings.contains(_KEY_PREVIEW_FALLBACK_ORIENTATION):
             return WorkAreaOrientation.PORTRAIT
@@ -191,6 +233,18 @@ class SettingsService(QObject):
         if raw == WorkAreaOrientation.LANDSCAPE.value:
             return WorkAreaOrientation.LANDSCAPE
         return WorkAreaOrientation.PORTRAIT
+
+
+def _read_optional_float(store: QSettings, key: str, *, default: float) -> float:
+    if not store.contains(key):
+        return default
+    value = store.value(key)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _read_optional_int(store: QSettings, key: str) -> int | None:

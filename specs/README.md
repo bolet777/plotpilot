@@ -41,6 +41,7 @@ specs/NNN-short-name/
 | 025 | [preview-performance](025-preview-performance/) | Cached flatten; async clip so position and scale stay responsive |
 | 026 | [modern-transform-controls](026-modern-transform-controls/) | Slider-based X/Y/scale panel synced with preview drag |
 | 027 | [window-resize-and-scroll](027-window-resize-and-scroll/) | Resizable window; page scrolls when the layout does not fit |
+| 028 | [print-margins](028-print-margins/) | Editable safe print margins inside the physical work area |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
+from plotpilot.models.print_margins import PrintMargins
 
 
 class MultiLayerJobState(StrEnum):
@@ -41,6 +42,7 @@ class MultiLayerPlotJob:
     artwork_transform: ArtworkTransform = ArtworkTransform()
     fallback_work_area: str = "A4"
     fallback_work_area_orientation: str = "Portrait"
+    print_margins: PrintMargins = field(default_factory=PrintMargins)
     completed_count: int = 0
     message: str = ""
     error_detail: str = ""

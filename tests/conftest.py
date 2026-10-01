@@ -113,6 +113,31 @@ def _fast_plotter_monitor_intervals(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _legacy_drawings_use_full_bleed_margins(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep pre-margin fixtures plottable without changing the 10 mm product default.
+
+    Those drawings sit inside the default margin, so an omitted margin and the
+    settings getter clip to the full work area here. ``test_print_margins``
+    keeps the real default. Torn down after the Qt drain fixture finishes.
+    """
+    if "test_print_margins.py" in request.node.nodeid:
+        return
+    from plotpilot.models.print_margins import PrintMargins
+    from plotpilot.services.settings_service import SettingsService
+
+    full_bleed = PrintMargins(0.0, 0.0)
+
+    def _resolve(margins: PrintMargins | None) -> PrintMargins:
+        return full_bleed if margins is None else margins
+
+    monkeypatch.setattr("plotpilot.models.print_margins.active_print_margins", _resolve)
+    monkeypatch.setattr(SettingsService, "print_margins", property(lambda self: full_bleed))
+
+
+@pytest.fixture(autouse=True)
 def _qt_plotter_hygiene() -> None:
     yield
     _drain_qt_runtime()

@@ -69,13 +69,25 @@ def clip_document_polylines(
     *,
     viewport_width_mm: float,
     viewport_height_mm: float,
+    clip_x_min_mm: float = 0.0,
+    clip_y_min_mm: float = 0.0,
+    clip_x_max_mm: float | None = None,
+    clip_y_max_mm: float | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
-    """Place document polylines and clip them to the machine viewport."""
+    """Place document polylines and clip them to an arbitrary machine rectangle.
+
+    Omitted clip edges use the full viewport starting at (0, 0). Product callers
+    pass the printable-area edges so margins do not shift machine coordinates.
+    """
     transform.validate()
-    if viewport_width_mm <= 0 or viewport_height_mm <= 0:
-        msg = "Plot viewport size must be positive."
-        raise PlotViewportError(msg)
-    clip = ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm)
+    clip = _resolve_clip_rect(
+        viewport_width_mm,
+        viewport_height_mm,
+        clip_x_min_mm=clip_x_min_mm,
+        clip_y_min_mm=clip_y_min_mm,
+        clip_x_max_mm=clip_x_max_mm,
+        clip_y_max_mm=clip_y_max_mm,
+    )
     return _clip_document_subpaths(polylines, transform, clip)
 
 
@@ -85,24 +97,32 @@ def prepare_positioned_plot_svg(
     viewport_width_mm: float,
     viewport_height_mm: float,
     transform: ArtworkTransform,
+    clip_x_min_mm: float = 0.0,
+    clip_y_min_mm: float = 0.0,
+    clip_x_max_mm: float | None = None,
+    clip_y_max_mm: float | None = None,
 ) -> PreparedPlotSvg:
     """Return clipped plot SVG in machine coordinates (1 unit = 1 mm)."""
     transform.validate()
-    if viewport_width_mm <= 0 or viewport_height_mm <= 0:
-        msg = "Plot viewport size must be positive."
-        raise PlotViewportError(msg)
-
-    flattened = flatten_document_geometry(svg_text)
-    clipped_paths = _clip_document_subpaths(
-        flattened.polylines,
-        transform,
-        ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm),
+    clip = _resolve_clip_rect(
+        viewport_width_mm,
+        viewport_height_mm,
+        clip_x_min_mm=clip_x_min_mm,
+        clip_y_min_mm=clip_y_min_mm,
+        clip_x_max_mm=clip_x_max_mm,
+        clip_y_max_mm=clip_y_max_mm,
     )
+    flattened = flatten_document_geometry(svg_text)
+    clipped_paths = _clip_document_subpaths(flattened.polylines, transform, clip)
 
     return emit_validated_plot_svg(
         clipped_paths,
         viewport_width_mm=viewport_width_mm,
         viewport_height_mm=viewport_height_mm,
+        clip_x_min_mm=clip.x_min,
+        clip_y_min_mm=clip.y_min,
+        clip_x_max_mm=clip.x_max,
+        clip_y_max_mm=clip.y_max,
     )
 
 
@@ -111,19 +131,81 @@ def emit_validated_plot_svg(
     *,
     viewport_width_mm: float,
     viewport_height_mm: float,
+    clip_x_min_mm: float = 0.0,
+    clip_y_min_mm: float = 0.0,
+    clip_x_max_mm: float | None = None,
+    clip_y_max_mm: float | None = None,
 ) -> PreparedPlotSvg:
-    """Emit machine-space SVG and run the final geometry safety check."""
+    """Emit machine-space SVG and run the final geometry safety check.
+
+    The SVG page stays the physical viewport. Coordinates must lie in *clip*.
+    """
     if not clipped_paths:
         msg = "No artwork intersects the plot area."
         raise PlotViewportError(msg)
 
+    clip = _resolve_clip_rect(
+        viewport_width_mm,
+        viewport_height_mm,
+        clip_x_min_mm=clip_x_min_mm,
+        clip_y_min_mm=clip_y_min_mm,
+        clip_x_max_mm=clip_x_max_mm,
+        clip_y_max_mm=clip_y_max_mm,
+    )
     out_svg = _emit_svg(clipped_paths, viewport_width_mm, viewport_height_mm)
-    _validate_output_geometry(out_svg, viewport_width_mm, viewport_height_mm)
+    _validate_emitted_svg(out_svg, viewport_width_mm, viewport_height_mm, clip)
     return PreparedPlotSvg(
         svg_text=out_svg,
         width_mm=viewport_width_mm,
         height_mm=viewport_height_mm,
         path_count=len(clipped_paths),
+    )
+
+
+def _resolve_clip_rect(
+    viewport_width_mm: float,
+    viewport_height_mm: float,
+    *,
+    clip_x_min_mm: float,
+    clip_y_min_mm: float,
+    clip_x_max_mm: float | None,
+    clip_y_max_mm: float | None,
+) -> ClipRect:
+    if viewport_width_mm <= 0 or viewport_height_mm <= 0:
+        msg = "Plot viewport size must be positive."
+        raise PlotViewportError(msg)
+    x_max = viewport_width_mm if clip_x_max_mm is None else clip_x_max_mm
+    y_max = viewport_height_mm if clip_y_max_mm is None else clip_y_max_mm
+    if x_max <= clip_x_min_mm or y_max <= clip_y_min_mm:
+        msg = "Print margins leave no printable area."
+        raise PlotViewportError(msg)
+    return ClipRect(clip_x_min_mm, clip_y_min_mm, x_max, y_max)
+
+
+def _validate_emitted_svg(
+    svg_text: str,
+    width_mm: float,
+    height_mm: float,
+    clip: ClipRect,
+) -> None:
+    """Keep the historical 3-argument validator call when the clip is the viewport."""
+    full_viewport = (
+        clip.x_min == 0.0
+        and clip.y_min == 0.0
+        and clip.x_max == width_mm
+        and clip.y_max == height_mm
+    )
+    if full_viewport:
+        _validate_output_geometry(svg_text, width_mm, height_mm)
+        return
+    _validate_output_geometry(
+        svg_text,
+        width_mm,
+        height_mm,
+        x_min_mm=clip.x_min,
+        y_min_mm=clip.y_min,
+        x_max_mm=clip.x_max,
+        y_max_mm=clip.y_max,
     )
 
 
@@ -413,7 +495,21 @@ def _fmt(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
-def _validate_output_geometry(svg_text: str, width_mm: float, height_mm: float) -> None:
+def _validate_output_geometry(
+    svg_text: str,
+    width_mm: float,
+    height_mm: float,
+    *,
+    x_min_mm: float = 0.0,
+    y_min_mm: float = 0.0,
+    x_max_mm: float | None = None,
+    y_max_mm: float | None = None,
+) -> None:
+    x_max = width_mm if x_max_mm is None else x_max_mm
+    y_max = height_mm if y_max_mm is None else y_max_mm
+    printable_is_machine = (
+        x_min_mm == 0.0 and y_min_mm == 0.0 and x_max == width_mm and y_max == height_mm
+    )
     try:
         root = ET.fromstring(svg_text)
     except ET.ParseError as exc:
@@ -421,6 +517,13 @@ def _validate_output_geometry(svg_text: str, width_mm: float, height_mm: float) 
         raise PlotViewportError(msg) from exc
 
     tol = COORD_TOLERANCE_MM
+    machine_message = (
+        "Plot preparation produced geometry outside the machine work area. "
+        "Plot cancelled for safety."
+    )
+    printable_message = (
+        "Plot preparation produced geometry outside the printable area. Plot cancelled for safety."
+    )
     for path in root.iter():
         if not path.tag.endswith("path"):
             continue
@@ -429,17 +532,16 @@ def _validate_output_geometry(svg_text: str, width_mm: float, height_mm: float) 
             continue
         for x, y in _parse_path_d_coords(d):
             if not math.isfinite(x) or not math.isfinite(y):
-                msg = (
-                    "Plot preparation produced geometry outside the machine work area. "
-                    "Plot cancelled for safety."
-                )
-                raise PlotViewportError(msg)
-            if x < -tol or y < -tol or x > width_mm + tol or y > height_mm + tol:
-                msg = (
-                    "Plot preparation produced geometry outside the machine work area. "
-                    "Plot cancelled for safety."
-                )
-                raise PlotViewportError(msg)
+                raise PlotViewportError(machine_message)
+            outside_machine = x < -tol or y < -tol or x > width_mm + tol or y > height_mm + tol
+            outside_printable = (
+                x < x_min_mm - tol or y < y_min_mm - tol or x > x_max + tol or y > y_max + tol
+            )
+            if outside_machine:
+                raise PlotViewportError(machine_message)
+            if outside_printable:
+                message = machine_message if printable_is_machine else printable_message
+                raise PlotViewportError(message)
 
 
 def _parse_path_d_coords(d: str) -> list[tuple[float, float]]:

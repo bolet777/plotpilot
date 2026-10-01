@@ -12,8 +12,10 @@ from plotpilot.geometry.plot_viewport import (
     PreparedPlotSvg,
     emit_validated_plot_svg,
 )
+from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
+from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.preview_work_area import (
@@ -88,6 +90,7 @@ def build_prepared_layer_preview(
     transform: ArtworkTransform,
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
     fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
+    print_margins: PrintMargins | None = None,
 ) -> PreparedLayerPreview:
     """Prepare layer geometry for preview using the plot pipeline."""
     from plotpilot.services.layer_geometry import position_and_clip_geometry, prepare_layer_geometry
@@ -110,21 +113,30 @@ def build_prepared_layer_preview(
         fallback=fallback,
         fallback_orientation=fallback_orientation,
     )
+    margins = print_margin_model.active_print_margins(print_margins)
     clipped = position_and_clip_geometry(
         geometry,
         transform,
         viewport_width_mm=viewport.width_mm,
         viewport_height_mm=viewport.height_mm,
+        print_margins=margins,
     )
     prepared: PreparedPlotSvg | None = None
     error_message = clipped.error_message
     if error_message is None:
         try:
+            area = printable_area_for(viewport.width_mm, viewport.height_mm, margins)
             prepared = emit_validated_plot_svg(
                 list(clipped.polylines),
                 viewport_width_mm=viewport.width_mm,
                 viewport_height_mm=viewport.height_mm,
+                clip_x_min_mm=area.x_mm,
+                clip_y_min_mm=area.y_mm,
+                clip_x_max_mm=area.x_max_mm,
+                clip_y_max_mm=area.y_max_mm,
             )
+        except PrintMarginsError as exc:
+            error_message = exc.user_message
         except PlotViewportError as exc:
             error_message = exc.user_message
 

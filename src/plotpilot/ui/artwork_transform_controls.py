@@ -21,6 +21,7 @@ from plotpilot.models.artwork_transform import (
     scale_percent,
     transform_from_scale_percent,
 )
+from plotpilot.models.print_margins import PrintMargins
 from plotpilot.ui.transform_slider_mapping import (
     SCALE_PRESET_PERCENTS,
     mm_to_position_slider,
@@ -51,6 +52,7 @@ class ArtworkTransformControls(QWidget):
     """X/Y/scale sliders with numeric fields, presets, and reset actions."""
 
     transform_changed = Signal(ArtworkTransform)
+    margins_changed = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -118,6 +120,28 @@ class ArtworkTransformControls(QWidget):
         footer.addWidget(self._reset_all)
         root.addLayout(footer)
 
+        margin_row = QHBoxLayout()
+        margin_row.setSpacing(6)
+        margin_row.addWidget(QLabel("Margins:", self))
+        margin_row.addWidget(QLabel("H", self))
+        self._margin_horizontal = self._build_margin_spin()
+        self._margin_horizontal.setToolTip(
+            "Inset from the left and right edges of the machine work area.",
+        )
+        margin_row.addWidget(self._margin_horizontal)
+        margin_row.addWidget(QLabel("V", self))
+        self._margin_vertical = self._build_margin_spin()
+        self._margin_vertical.setToolTip(
+            "Inset from the top and bottom edges of the machine work area.",
+        )
+        margin_row.addWidget(self._margin_vertical)
+        margin_row.addStretch(1)
+        root.addLayout(margin_row)
+
+        self._printable_label = QLabel("Printable: —", self)
+        self._printable_label.setWordWrap(True)
+        root.addWidget(self._printable_label)
+
         self._status_label = QLabel("", self)
         self._status_label.setWordWrap(True)
         root.addWidget(self._status_label)
@@ -126,6 +150,7 @@ class ArtworkTransformControls(QWidget):
         self._reset_y.clicked.connect(self._on_reset_y)
         self._refresh_position_slider_ranges()
         self._refresh_scale_presets()
+        self.set_print_margins(PrintMargins())
 
     def _build_axis_row(
         self,
@@ -170,6 +195,57 @@ class ArtworkTransformControls(QWidget):
 
     def set_plot_area_text(self, text: str) -> None:
         self._plot_area_label.setText(text)
+
+    def set_printable_text(self, text: str) -> None:
+        self._printable_label.setText(text)
+
+    def print_margins(self) -> PrintMargins:
+        return PrintMargins(
+            horizontal_mm=self._margin_horizontal.value(),
+            vertical_mm=self._margin_vertical.value(),
+        )
+
+    def set_print_margins(self, margins: PrintMargins) -> None:
+        self._blocking = True
+        try:
+            self._margin_horizontal.setValue(margins.horizontal_mm)
+            self._margin_vertical.setValue(margins.vertical_mm)
+        finally:
+            self._blocking = False
+
+    def set_margin_ranges(
+        self,
+        max_horizontal_mm: float,
+        max_vertical_mm: float,
+    ) -> PrintMargins | None:
+        """Limit each spin. Return the margins when a value was reduced to fit."""
+        self._blocking = True
+        try:
+            before = self.print_margins()
+            self._margin_horizontal.setMaximum(max(0.0, max_horizontal_mm))
+            self._margin_vertical.setMaximum(max(0.0, max_vertical_mm))
+            after = self.print_margins()
+        finally:
+            self._blocking = False
+        if after != before:
+            return after
+        return None
+
+    def _build_margin_spin(self) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox(self)
+        spin.setRange(0.0, 1000.0)
+        spin.setDecimals(1)
+        spin.setSingleStep(1.0)
+        spin.setSuffix(" mm")
+        spin.setFixedWidth(88)
+        spin.setKeyboardTracking(True)
+        spin.valueChanged.connect(self._on_margin_spin_changed)
+        return spin
+
+    def _on_margin_spin_changed(self, _value: float) -> None:
+        if self._blocking:
+            return
+        self.margins_changed.emit(self.print_margins())
 
     def set_status_lines(self, lines: list[str]) -> None:
         self._status_label.setText("\n".join(line for line in lines if line))
