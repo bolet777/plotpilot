@@ -9,17 +9,31 @@ from pathlib import Path
 REFERENCE_PEN_DOWN_SPEED = 25
 REFERENCE_PEN_UP_SPEED = 75
 REFERENCE_ACCELERATION = 75
+REFERENCE_PEN_UP_POSITION = 60
+REFERENCE_PEN_DOWN_POSITION = 30
 
 SPEED_MIN = 1
 SPEED_MAX = 100
 ACCEL_MIN = 1
 ACCEL_MAX = 100
+PEN_POS_MIN = 0
+PEN_POS_MAX = 100
 MODEL_MIN = 1
 MODEL_MAX = 7
 
-# axicli 3.9.6 --reordering values (see specs/012-plot-optimization/research.md).
+# axicli 3.9.6 --reordering values (see specs/023-axicli-controls/research.md).
 REORDERING_BASIC = 1
-REORDERING_ALLOWED = frozenset({REORDERING_BASIC})
+REORDERING_FULL = 2
+REORDERING_STRICT = 4
+REORDERING_ALLOWED = frozenset({REORDERING_BASIC, REORDERING_FULL, REORDERING_STRICT})
+
+# (value, label). None omits -G (axidraw_conf.py decides).
+PATH_ORDER_OPTIONS: tuple[tuple[int | None, str], ...] = (
+    (None, "Driver default"),
+    (REORDERING_STRICT, "None / strict file order"),
+    (REORDERING_BASIC, "Basic reorder"),
+    (REORDERING_FULL, "Full reorder + reverse"),
+)
 
 AXIDRAW_MODELS: dict[int, str] = {
     1: "AxiDraw V2, V3, or SE/A4",
@@ -38,13 +52,21 @@ class PlotSettingsValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PlotSettings:
-    """None fields mean omit CLI flag (use axicli / axidraw_conf defaults)."""
+    """Optional fields are omitted from argv so the driver config stays authoritative.
+
+    ``path_reordering`` defaults to strict file order (``-G4``) so path order does
+    not depend on ``axidraw_conf.py``. ``None`` is the explicit driver-default policy.
+    Orientation is always preserved (``-N``); there is no enable flag.
+    """
 
     pen_down_speed: int | None = None
     pen_up_speed: int | None = None
     acceleration: int | None = None
     model: int | None = None
-    path_reordering: int | None = None
+    path_reordering: int | None = REORDERING_STRICT
+    pen_pos_up: int | None = None
+    pen_pos_down: int | None = None
+    const_speed: bool = False
 
     def validate(self) -> None:
         if self.pen_down_speed is not None and not SPEED_MIN <= self.pen_down_speed <= SPEED_MAX:
@@ -59,27 +81,40 @@ class PlotSettings:
             raise PlotSettingsValidationError(
                 f"Acceleration must be {ACCEL_MIN}–{ACCEL_MAX}.",
             )
+        if self.pen_pos_up is not None and not PEN_POS_MIN <= self.pen_pos_up <= PEN_POS_MAX:
+            raise PlotSettingsValidationError(
+                f"Pen-up position must be {PEN_POS_MIN}–{PEN_POS_MAX}.",
+            )
+        if self.pen_pos_down is not None and not PEN_POS_MIN <= self.pen_pos_down <= PEN_POS_MAX:
+            raise PlotSettingsValidationError(
+                f"Pen-down position must be {PEN_POS_MIN}–{PEN_POS_MAX}.",
+            )
         if self.model is not None and not MODEL_MIN <= self.model <= MODEL_MAX:
             raise PlotSettingsValidationError(
                 f"Model must be {MODEL_MIN}–{MODEL_MAX}.",
             )
         if self.path_reordering is not None and self.path_reordering not in REORDERING_ALLOWED:
             raise PlotSettingsValidationError(
-                "Path reordering must be omitted or set to basic reorder (1).",
+                "Path ordering must be driver default or axicli -G 1, 2, or 4.",
             )
+        if not isinstance(self.const_speed, bool):
+            raise PlotSettingsValidationError("Constant speed must be on or off.")
 
     @property
     def has_overrides(self) -> bool:
-        return any(
-            value is not None
-            for value in (
-                self.pen_down_speed,
-                self.pen_up_speed,
-                self.acceleration,
-                self.model,
-                self.path_reordering,
-            )
+        optional = (
+            self.pen_down_speed,
+            self.pen_up_speed,
+            self.acceleration,
+            self.model,
+            self.pen_pos_up,
+            self.pen_pos_down,
         )
+        if any(value is not None for value in optional):
+            return True
+        if self.const_speed:
+            return True
+        return self.path_reordering != REORDERING_STRICT
 
     @property
     def optimize_path_order(self) -> bool:
@@ -87,17 +122,26 @@ class PlotSettings:
 
 
 def append_axicli_motion_argv(argv: list[str], settings: PlotSettings) -> None:
-    """Append speed/accel/model/reorder flags shared by plot and preview."""
+    """Append motion flags shared by plot and preview. Each flag is added at most once."""
     if settings.pen_down_speed is not None:
         argv.extend(["-s", str(settings.pen_down_speed)])
     if settings.pen_up_speed is not None:
         argv.extend(["-S", str(settings.pen_up_speed)])
     if settings.acceleration is not None:
         argv.extend(["-a", str(settings.acceleration)])
+    if settings.pen_pos_up is not None:
+        argv.extend(["-u", str(settings.pen_pos_up)])
+    if settings.pen_pos_down is not None:
+        argv.extend(["-d", str(settings.pen_pos_down)])
     if settings.model is not None:
         argv.extend(["-L", str(settings.model)])
     if settings.path_reordering is not None:
         argv.extend(["-G", str(settings.path_reordering)])
+    # Always preserve SVG orientation. axicli cannot force auto-rotate on, and
+    # the rotation direction is config-only. See specs/023-axicli-controls/research.md.
+    argv.append("-N")
+    if settings.const_speed:
+        argv.append("-C")
 
 
 def build_axicli_plot_argv(

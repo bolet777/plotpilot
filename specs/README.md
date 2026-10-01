@@ -37,6 +37,7 @@ specs/NNN-short-name/
 | 016 | [project-session](016-project-session/) | Versioned `.plotpilot` save and reopen |
 | 017 | [svg-golden-baseline](017-svg-golden-baseline/) | SVG golden oracles; known geometry bugs as xfail |
 | 022 | [vpype-evaluation](022-vpype-evaluation/) | Evaluate vpype as geometry engine (spike only; keep current engine) |
+| 023 | [axicli-controls](023-axicli-controls/) | Explicit axicli path order, pen heights, `-N`, `-C`, home, estimate |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

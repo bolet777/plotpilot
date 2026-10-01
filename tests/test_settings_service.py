@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from plotpilot.models.plot_settings import REORDERING_BASIC, PlotSettings
+from plotpilot.models.plot_settings import REORDERING_BASIC, REORDERING_STRICT, PlotSettings
 from plotpilot.services.settings_service import SettingsService
 
 
@@ -83,5 +83,5 @@ def test_reset_clears_path_reordering(isolated_settings: SettingsService) -> Non
         isolated_settings._organization,  # noqa: SLF001
         isolated_settings._application,  # noqa: SLF001
     )
-    assert isolated_settings.plot_settings.path_reordering is None
+    assert isolated_settings.plot_settings.path_reordering == REORDERING_STRICT
     assert not store.contains("plot/path_reordering")

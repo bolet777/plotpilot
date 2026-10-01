@@ -25,6 +25,11 @@ from plotpilot.models.plot_progress import (
 )
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
+from plotpilot.models.pre_plot_estimate import (
+    PrePlotEstimateReport,
+    build_pre_plot_estimate_report,
+    running_pre_plot_estimate,
+)
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import PLOT_CANCEL_WAIT, AxiDrawCliBackend
@@ -42,6 +47,29 @@ PLOT_EXIT_WAIT_SECONDS = PLOT_CANCEL_WAIT + 12.0
 AUTO_DETECT_INTERVAL_MS = 5000
 AUTO_DETECT_RESUME_DELAY_MS = 1000
 PLOT_PROGRESS_TICK_MS = 500
+
+_MANUAL_OPERATION_NAMES = frozenset(
+    {
+        "pen_up",
+        "pen_down",
+        "walk_home",
+        "disable_xy",
+        "detect",
+        "detect_presence",
+        "pre_plot_estimate",
+    }
+)
+_HARDWARE_PAUSE_NAMES = frozenset(
+    {
+        "plot",
+        "pen_up",
+        "pen_down",
+        "walk_home",
+        "disable_xy",
+        "safe_stop",
+        "pre_plot_estimate",
+    }
+)
 
 
 class _PlotterTaskSignals(QObject):
@@ -114,6 +142,7 @@ class PlotterService(QObject):
     safe_stop_finished = Signal(object)
     manual_command_finished = Signal(str, object)
     pen_up_finished = Signal(object)
+    pre_plot_estimate_changed = Signal(object)
 
     def __init__(
         self,
@@ -344,28 +373,101 @@ class PlotterService(QObject):
             return
         self._begin_presence_detect()
 
+    @property
+    def manual_command_active(self) -> bool:
+        return self._manual_operation is not None
+
     def pen_up(self) -> bool:
         """Queue raise_pen on the worker thread. Returns False if not accepted."""
-        if not self._can_queue_manual_pen_command():
+        if self._manual_command_block_reason() is not None:
             return False
         self._run_async(self._backend.pen_up, "pen_up")
         return True
 
     def pen_down(self) -> bool:
         """Queue lower_pen on the worker thread. Returns False if not accepted."""
-        if not self._can_queue_manual_pen_command():
+        if self._manual_command_block_reason() is not None:
             return False
         self._run_async(self._backend.pen_down, "pen_down")
         return True
 
-    def _can_queue_manual_pen_command(self) -> bool:
-        if not self._status.pen_commands_enabled:
-            return False
-        if self._plot_in_flight or self._safe_stop_in_flight:
-            return False
+    def home(self) -> str | None:
+        """Queue walk_home. Returns an error message when the command is refused."""
+        reason = self._manual_command_block_reason()
+        if reason is not None:
+            return reason
+        self._run_async(self._backend.walk_home, "walk_home")
+        return None
+
+    def motors_off(self) -> str | None:
+        """Queue disable_xy. Returns an error message when the command is refused."""
+        reason = self._manual_command_block_reason()
+        if reason is not None:
+            return reason
+        self._run_async(self._backend.disable_xy, "disable_xy")
+        return None
+
+    def _manual_command_block_reason(self) -> str | None:
+        if self._plot_in_flight or self._safe_stop_in_flight or self._plot_state.is_active:
+            return "Cannot run this command while a plot is active."
         if self._manual_operation is not None:
-            return False
-        return True
+            return "Plotter is busy with another command."
+        if not self._status.pen_commands_enabled:
+            return "AxiDraw is not ready for manual commands."
+        return None
+
+    def request_pre_plot_estimate(
+        self,
+        document: SvgDocument,
+        layers: list[SvgLayer],
+        *,
+        plot_settings: PlotSettings | None = None,
+        artwork_transform: ArtworkTransform | None = None,
+        fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
+    ) -> str | None:
+        """Estimate the final clipped SVG for each layer. Returns an error if refused."""
+        if self._plot_in_flight or self._safe_stop_in_flight or self._plot_state.is_active:
+            return "Cannot estimate while a plot is active."
+        if self._manual_operation is not None:
+            return "Plotter is busy with another command."
+        if not layers:
+            return "Select a layer to estimate."
+
+        settings = plot_settings if plot_settings is not None else self._snapshot_plot_settings()
+        transform = (
+            artwork_transform if artwork_transform is not None else ArtworkTransform.identity()
+        )
+        layer_snapshot = list(layers)
+        report = running_pre_plot_estimate(len(layer_snapshot))
+        self.pre_plot_estimate_changed.emit(report)
+
+        def _run_pre_plot_estimate() -> PrePlotEstimateReport:
+            results: list[tuple[str, PlotEstimate | None]] = []
+            for layer in layer_snapshot:
+                layer_svg = plot_svg_for_layer(document, layer)
+                try:
+                    prepared = prepare_layer_plot_svg(
+                        layer_svg,
+                        plot_settings=settings,
+                        transform=transform,
+                        fallback=fallback_work_area,
+                    )
+                except PlotViewportError:
+                    results.append((layer.name, None))
+                    continue
+                temp_path = _write_temp_svg(prepared.svg_text)
+                try:
+                    estimate = self._backend.estimate_plot_svg(temp_path, settings=settings)
+                finally:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("Could not remove temporary estimate file %s", temp_path)
+                results.append((layer.name, estimate))
+            return build_pre_plot_estimate_report(results)
+
+        self._run_async(_run_pre_plot_estimate, "pre_plot_estimate")
+        return None
 
     def start_plot_layer(
         self,
@@ -534,9 +636,9 @@ class PlotterService(QObject):
         operation: Callable[[], object],
         operation_name: str,
     ) -> None:
-        if operation_name in ("pen_up", "pen_down", "detect", "detect_presence"):
+        if operation_name in _MANUAL_OPERATION_NAMES:
             self._manual_operation = operation_name
-        if operation_name in ("plot", "pen_up", "pen_down", "safe_stop"):
+        if operation_name in _HARDWARE_PAUSE_NAMES:
             self._pause_auto_detect_for_hardware()
         signals = _PlotterTaskSignals(self)
         signals.finished.connect(self._on_task_finished)
@@ -547,6 +649,18 @@ class PlotterService(QObject):
     def _on_task_finished(self, result: object, operation_name: str) -> None:
         if self._shutdown:
             return
+        if operation_name == "pre_plot_estimate":
+            if self._manual_operation == operation_name:
+                self._manual_operation = None
+            report = (
+                result
+                if isinstance(result, PrePlotEstimateReport)
+                else PrePlotEstimateReport(state="failed", summary="Estimate failed.")
+            )
+            self.pre_plot_estimate_changed.emit(report)
+            self._schedule_auto_detect_resume()
+            return
+
         if operation_name == "estimate":
             if self._progress_started_monotonic is not None and self._plot_state.phase in (
                 PlotPhase.RUNNING,
@@ -620,7 +734,7 @@ class PlotterService(QObject):
             self._schedule_auto_detect_resume()
             return
 
-        if operation_name in ("pen_up", "pen_down"):
+        if operation_name in ("pen_up", "pen_down", "walk_home", "disable_xy"):
             if self._manual_operation == operation_name:
                 self._manual_operation = None
             if isinstance(result, PlotterStatus):

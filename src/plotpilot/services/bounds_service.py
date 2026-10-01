@@ -32,9 +32,14 @@ def check_plot_bounds(
     svg_text: str,
     plot_settings: PlotSettings,
     *,
-    auto_rotate: bool = True,
+    auto_rotate: bool = False,
 ) -> PlotBoundsCheck:
-    """Compare root SVG page size to selected model travel limits."""
+    """Compare root SVG page size to selected model travel limits.
+
+    PlotPilot always passes axicli ``-N``, so the default comparison does not
+    swap portrait pages. Pass ``auto_rotate=True`` only to inspect axicli's
+    config-default behavior.
+    """
     try:
         physical = parse_physical_size(svg_text)
     except PlotDimensionError as exc:
@@ -101,7 +106,10 @@ def check_plot_bounds(
 
     extra = ""
     if would_fit_rotated:
-        extra = "\nArtwork would fit if rotated, but automatic rotation is not implemented."
+        extra = (
+            "\nThis page would fit the selected model if rotated 90°. "
+            "PlotPilot keeps the preview orientation (axicli -N)."
+        )
 
     return PlotBoundsCheck(
         status=BoundsStatus.OUT_OF_BOUNDS,

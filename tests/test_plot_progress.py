@@ -115,9 +115,10 @@ def test_preview_argv_includes_motion_and_g1() -> None:
     assert "-G" in argv and "1" in argv
 
 
-def test_preview_argv_omits_g_without_override() -> None:
+def test_preview_argv_preserves_orientation_and_strict_order() -> None:
     argv = build_axicli_preview_argv("axicli", Path("layer.svg"), PlotSettings())
-    assert "-G" not in argv
+    assert "-G" in argv and argv[argv.index("-G") + 1] == "4"
+    assert argv.count("-N") == 1
 
 
 def test_progress_labels() -> None:

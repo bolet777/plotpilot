@@ -69,6 +69,9 @@ def session_to_document(
             "acceleration": settings.acceleration,
             "model": settings.model,
             "path_reordering": settings.path_reordering,
+            "pen_pos_up": settings.pen_pos_up,
+            "pen_pos_down": settings.pen_pos_down,
+            "const_speed": settings.const_speed,
         },
         "preview": {"fallback_work_area": session.fallback_work_area.value},
     }
@@ -188,7 +191,10 @@ def _parse_plot_settings(block: object) -> PlotSettings:
         pen_up_speed=_optional_int(block.get("pen_up_speed")),
         acceleration=_optional_int(block.get("acceleration")),
         model=_optional_int(block.get("model")),
-        path_reordering=_optional_int(block.get("path_reordering")),
+        path_reordering=_legacy_path_reordering(block),
+        pen_pos_up=_optional_int(block.get("pen_pos_up")),
+        pen_pos_down=_optional_int(block.get("pen_pos_down")),
+        const_speed=_optional_bool(block.get("const_speed")),
     )
     try:
         settings.validate()
@@ -204,6 +210,21 @@ def _parse_fallback(block: object) -> FallbackWorkArea:
     if raw == FallbackWorkArea.A3.value:
         return FallbackWorkArea.A3
     return FallbackWorkArea.A4
+
+
+def _legacy_path_reordering(block: dict[str, Any]) -> int | None:
+    """Missing or null ``path_reordering`` keeps the v1 omit-``-G`` behavior."""
+    if "path_reordering" not in block:
+        return None
+    return _optional_int(block.get("path_reordering"))
+
+
+def _optional_bool(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return False
 
 
 def _optional_int(value: object) -> int | None:
