@@ -5,11 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QObject, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
+    QApplication,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -18,6 +30,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -69,6 +83,69 @@ from plotpilot.ui.plot_progress_labels import (
 )
 from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
+
+_PREFERRED_WINDOW_WIDTH = 900
+_PREFERRED_WINDOW_HEIGHT = 560
+_MINIMUM_WINDOW_WIDTH = 480
+_MINIMUM_WINDOW_HEIGHT = 320
+
+
+def window_size_bounds(
+    available_width: int | None,
+    available_height: int | None,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ``(minimum, initial)`` sizes clamped to the usable screen.
+
+    ``available_*`` should already exclude the menu bar and Dock. The initial
+    size stays 900×560 when that fits, and never exceeds the usable screen.
+    """
+    min_w = _MINIMUM_WINDOW_WIDTH
+    min_h = _MINIMUM_WINDOW_HEIGHT
+    width = _PREFERRED_WINDOW_WIDTH
+    height = _PREFERRED_WINDOW_HEIGHT
+    if available_width is not None and available_width > 0:
+        min_w = min(min_w, available_width)
+        width = min(width, available_width)
+    if available_height is not None and available_height > 0:
+        min_h = min(min_h, available_height)
+        height = min(height, available_height)
+    return (min_w, min_h), (max(width, min_w), max(height, min_h))
+
+
+class _MainContentScrollArea(QScrollArea):
+    """Page scroller whose minimum size does not follow the document size."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt API
+        return QSize(0, 0)
+
+
+class _LayerListWheelFilter(QObject):
+    """Forward wheel events to the page when the layer list cannot scroll."""
+
+    def __init__(self, scroll: QScrollArea) -> None:
+        super().__init__(scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 — Qt API
+        if not isinstance(watched, QListWidget) or not isinstance(event, QWheelEvent):
+            return False
+        delta = event.angleDelta()
+        pixels = event.pixelDelta()
+        wants_vertical = delta.y() != 0 or pixels.y() != 0
+        wants_horizontal = delta.x() != 0 or pixels.x() != 0
+        if not wants_vertical and not wants_horizontal:
+            return False
+        vertical = watched.verticalScrollBar()
+        horizontal = watched.horizontalScrollBar()
+        list_scrolls_vertically = vertical.maximum() > vertical.minimum() and wants_vertical
+        list_scrolls_horizontally = horizontal.maximum() > horizontal.minimum() and wants_horizontal
+        if list_scrolls_vertically or list_scrolls_horizontally:
+            return False
+        viewport = self._scroll.viewport()
+        if viewport is None:
+            return False
+        QApplication.sendEvent(viewport, event)
+        return True
 
 
 def choose_svg_file(parent: QWidget) -> str | None:
@@ -126,7 +203,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("PlotPilot")
-        self.resize(900, 560)
 
         self._document: SvgDocument | None = None
         self._layers: list[SvgLayer] = []
@@ -161,16 +237,17 @@ class MainWindow(QMainWindow):
         self._preview_compute = PreviewComputeService(parent=self)
         self._preview_compute.finished.connect(self._on_preview_compute_finished)
 
-        central = QWidget(self)
-        root_layout = QVBoxLayout(central)
+        content = QWidget()
+        content.setObjectName("mainContent")
+        root_layout = QVBoxLayout(content)
 
         content_row = QHBoxLayout()
         left_column = QVBoxLayout()
-        layers_heading = QLabel("Layers", central)
+        layers_heading = QLabel("Layers", content)
         layers_heading.setStyleSheet("font-weight: bold;")
         left_column.addWidget(layers_heading)
 
-        self._layers_list = QListWidget(central)
+        self._layers_list = QListWidget(content)
         self._layers_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._layers_list.setMinimumWidth(220)
         self._layers_list.currentRowChanged.connect(self._on_layer_row_changed)
@@ -182,14 +259,14 @@ class MainWindow(QMainWindow):
         preview_column = QVBoxLayout()
         preview_column.setSpacing(6)
 
-        self._open_svg_persistent_button = QPushButton("Open SVG…", central)
+        self._open_svg_persistent_button = QPushButton("Open SVG…", content)
         self._open_svg_persistent_button.setVisible(False)
         preview_column.addWidget(
             self._open_svg_persistent_button,
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
 
-        self._fallback_work_area_row = QWidget(central)
+        self._fallback_work_area_row = QWidget(content)
         fallback_row = QHBoxLayout(self._fallback_work_area_row)
         fallback_row.setContentsMargins(0, 0, 0, 0)
         fallback_row.addWidget(QLabel("Work area:", self._fallback_work_area_row))
@@ -218,12 +295,12 @@ class MainWindow(QMainWindow):
         fallback_row.addStretch(1)
         preview_column.addWidget(self._fallback_work_area_row)
 
-        self._artwork_controls = ArtworkTransformControls(central)
+        self._artwork_controls = ArtworkTransformControls(content)
         self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
         preview_column.addWidget(self._artwork_controls)
 
-        self._preview_stack = QStackedWidget(central)
-        self._preview_empty_page = QWidget(central)
+        self._preview_stack = QStackedWidget(content)
+        self._preview_empty_page = QWidget(content)
         empty_layout = QVBoxLayout(self._preview_empty_page)
         empty_layout.addStretch(1)
         empty_heading = QLabel("No SVG loaded", self._preview_empty_page)
@@ -248,7 +325,7 @@ class MainWindow(QMainWindow):
         empty_layout.addWidget(empty_shortcut_hint)
         empty_layout.addStretch(1)
 
-        self._preview = LayerPreviewWidget(central)
+        self._preview = LayerPreviewWidget(content)
         self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
         self._preview_prep_timer = QTimer(self)
         self._preview_prep_timer.setSingleShot(True)
@@ -260,35 +337,35 @@ class MainWindow(QMainWindow):
         self._refresh_artwork_transform_panel()
         preview_column.addWidget(self._preview_stack, stretch=1)
 
-        preview_column_host = QWidget(central)
+        preview_column_host = QWidget(content)
         preview_column_host.setLayout(preview_column)
         content_row.addWidget(preview_column_host, stretch=1)
 
         root_layout.addLayout(content_row, stretch=1)
 
-        plotter_heading = QLabel("Plotter", central)
+        plotter_heading = QLabel("Plotter", content)
         plotter_heading.setStyleSheet("font-weight: bold;")
         root_layout.addWidget(plotter_heading)
 
         plotter_row = QHBoxLayout()
-        self._plotter_name_label = QLabel("AxiDraw", central)
+        self._plotter_name_label = QLabel("AxiDraw", content)
         plotter_row.addWidget(self._plotter_name_label)
 
-        self._plotter_status_label = QLabel("○ Not connected", central)
+        self._plotter_status_label = QLabel("○ Not connected", content)
         self._plotter_status_label.setWordWrap(True)
         plotter_row.addWidget(self._plotter_status_label, stretch=1)
         root_layout.addLayout(plotter_row)
 
         plotter_buttons = QHBoxLayout()
-        self._pen_up_button = QPushButton("Pen ↑", central)
+        self._pen_up_button = QPushButton("Pen ↑", content)
         self._pen_up_button.clicked.connect(self._plotter_service.pen_up)
         plotter_buttons.addWidget(self._pen_up_button)
 
-        self._pen_down_button = QPushButton("Pen ↓", central)
+        self._pen_down_button = QPushButton("Pen ↓", content)
         self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
         plotter_buttons.addWidget(self._pen_down_button)
 
-        self._home_button = QPushButton("Home", central)
+        self._home_button = QPushButton("Home", content)
         self._home_button.setToolTip(
             "Return to the position where the motors were enabled (walk_home). "
             "Does not lower the pen.",
@@ -296,36 +373,36 @@ class MainWindow(QMainWindow):
         self._home_button.clicked.connect(self._on_home)
         plotter_buttons.addWidget(self._home_button)
 
-        self._motors_off_button = QPushButton("Motors Off", central)
+        self._motors_off_button = QPushButton("Motors Off", content)
         self._motors_off_button.setToolTip(
             "Disable the XY motors (disable_xy). Does not move the carriage or lower the pen.",
         )
         self._motors_off_button.clicked.connect(self._on_motors_off)
         plotter_buttons.addWidget(self._motors_off_button)
 
-        self._plotter_refresh_button = QPushButton("Refresh", central)
+        self._plotter_refresh_button = QPushButton("Refresh", content)
         self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
         plotter_buttons.addWidget(self._plotter_refresh_button)
 
-        self._plot_layer_button = QPushButton("Plot Selected Layer", central)
+        self._plot_layer_button = QPushButton("Plot Selected Layer", content)
         self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
         plotter_buttons.addWidget(self._plot_layer_button)
 
-        self._plot_checked_button = QPushButton("Plot Checked Layers", central)
+        self._plot_checked_button = QPushButton("Plot Checked Layers", content)
         self._plot_checked_button.clicked.connect(self._on_plot_checked_layers)
         plotter_buttons.addWidget(self._plot_checked_button)
 
-        self._plot_stop_button = QPushButton("Stop", central)
+        self._plot_stop_button = QPushButton("Stop", content)
         self._plot_stop_button.clicked.connect(self._on_stop_plot)
         self._plot_stop_button.setEnabled(False)
         plotter_buttons.addWidget(self._plot_stop_button)
 
-        self._multi_continue_button = QPushButton("Continue", central)
+        self._multi_continue_button = QPushButton("Continue", content)
         self._multi_continue_button.clicked.connect(self._on_multi_continue)
         self._multi_continue_button.setVisible(False)
         plotter_buttons.addWidget(self._multi_continue_button)
 
-        self._estimate_button = QPushButton("Estimate", central)
+        self._estimate_button = QPushButton("Estimate", content)
         self._estimate_button.setToolTip(
             "Estimate drawing time from the final clipped SVG (axicli -v -T). "
             "Pen-change pauses are not included.",
@@ -336,55 +413,68 @@ class MainWindow(QMainWindow):
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
 
-        self._estimate_label = QLabel("", central)
+        self._estimate_label = QLabel("", content)
         self._estimate_label.setWordWrap(True)
         root_layout.addWidget(self._estimate_label)
 
-        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
+        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=content)
         self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
         root_layout.addWidget(self._plot_settings)
 
-        self._bounds_status_label = QLabel("", central)
+        self._bounds_status_label = QLabel("", content)
         self._bounds_status_label.setWordWrap(True)
         root_layout.addWidget(self._bounds_status_label)
 
-        self._plot_progress_headline = QLabel("", central)
+        self._plot_progress_headline = QLabel("", content)
         self._plot_progress_headline.setWordWrap(True)
         self._plot_progress_headline.setVisible(False)
         root_layout.addWidget(self._plot_progress_headline)
 
-        self._plot_progress_bar = QProgressBar(central)
+        self._plot_progress_bar = QProgressBar(content)
         self._plot_progress_bar.setVisible(False)
         self._plot_progress_bar.setTextVisible(True)
         self._plot_progress_bar.setRange(0, 100)
         root_layout.addWidget(self._plot_progress_bar)
 
-        self._plot_progress_timing = QLabel("", central)
+        self._plot_progress_timing = QLabel("", content)
         self._plot_progress_timing.setVisible(False)
         root_layout.addWidget(self._plot_progress_timing)
 
-        self._plot_progress_next = QLabel("", central)
+        self._plot_progress_next = QLabel("", content)
         self._plot_progress_next.setVisible(False)
         root_layout.addWidget(self._plot_progress_next)
 
-        self._plot_activity_label = QLabel("", central)
+        self._plot_activity_label = QLabel("", content)
         self._plot_activity_label.setWordWrap(True)
         root_layout.addWidget(self._plot_activity_label)
 
-        self._pen_change_label = QLabel("", central)
+        self._pen_change_label = QLabel("", content)
         self._pen_change_label.setWordWrap(True)
         self._pen_change_label.setVisible(False)
         root_layout.addWidget(self._pen_change_label)
 
-        self._plotter_message_label = QLabel("", central)
+        self._plotter_message_label = QLabel("", content)
         self._plotter_message_label.setWordWrap(True)
         root_layout.addWidget(self._plotter_message_label)
 
-        self._status_label = QLabel("", central)
+        self._status_label = QLabel("", content)
         self._status_label.setWordWrap(True)
         root_layout.addWidget(self._status_label)
 
-        self.setCentralWidget(central)
+        scroll = _MainContentScrollArea(self)
+        scroll.setObjectName("mainContentScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        self._content_scroll = scroll
+        self._layer_list_wheel_filter = _LayerListWheelFilter(scroll)
+        self._layers_list.installEventFilter(self._layer_list_wheel_filter)
+        self.setCentralWidget(scroll)
         self._build_menu()
         self._open_svg_empty_button.clicked.connect(self._open_svg_action.trigger)
         self._open_svg_persistent_button.clicked.connect(self._open_svg_action.trigger)
@@ -401,6 +491,17 @@ class MainWindow(QMainWindow):
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
         self._update_window_title()
+        self._apply_launch_geometry()
+
+    def _apply_launch_geometry(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        available = None if screen is None else screen.availableGeometry().size()
+        minimum, initial = window_size_bounds(
+            None if available is None else available.width(),
+            None if available is None else available.height(),
+        )
+        self.setMinimumSize(minimum[0], minimum[1])
+        self.resize(initial[0], initial[1])
 
     @property
     def project_file_path(self) -> Path | None:
