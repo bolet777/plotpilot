@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from plotpilot.geometry.plot_viewport import PlotViewportError
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.plot_estimate import PlotEstimate
+from plotpilot.models.plot_estimate import PlotEstimate, PreviewEstimateResult
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
 from plotpilot.models.plot_progress import (
     PlotProgress,
@@ -442,7 +442,7 @@ class PlotterService(QObject):
         self.pre_plot_estimate_changed.emit(report)
 
         def _run_pre_plot_estimate() -> PrePlotEstimateReport:
-            results: list[tuple[str, PlotEstimate | None]] = []
+            results: list[tuple[str, PlotEstimate | None, str | None]] = []
             for layer in layer_snapshot:
                 layer_svg = plot_svg_for_layer(document, layer)
                 try:
@@ -452,18 +452,18 @@ class PlotterService(QObject):
                         transform=transform,
                         fallback=fallback_work_area,
                     )
-                except PlotViewportError:
-                    results.append((layer.name, None))
+                except PlotViewportError as exc:
+                    results.append((layer.name, None, _short_failure(exc.user_message)))
                     continue
                 temp_path = _write_temp_svg(prepared.svg_text)
                 try:
-                    estimate = self._backend.estimate_plot_svg(temp_path, settings=settings)
+                    outcome = _preview_outcome(self._backend, temp_path, settings)
                 finally:
                     try:
                         temp_path.unlink(missing_ok=True)
                     except OSError:
                         logger.warning("Could not remove temporary estimate file %s", temp_path)
-                results.append((layer.name, estimate))
+                results.append((layer.name, outcome.estimate, outcome.failure))
             return build_pre_plot_estimate_report(results)
 
         self._run_async(_run_pre_plot_estimate, "pre_plot_estimate")
@@ -995,6 +995,32 @@ class PlotterService(QObject):
             path.unlink(missing_ok=True)
         except OSError:
             logger.warning("Could not remove temporary plot file %s", path)
+
+
+def _preview_outcome(
+    backend: PlotterBackend,
+    svg_path: Path,
+    settings: PlotSettings,
+) -> PreviewEstimateResult:
+    preview = getattr(backend, "estimate_preview", None)
+    if callable(preview):
+        outcome = preview(svg_path, settings=settings)
+        if isinstance(outcome, PreviewEstimateResult):
+            return outcome
+    estimate = backend.estimate_plot_svg(svg_path, settings=settings)
+    if isinstance(estimate, PlotEstimate):
+        return PreviewEstimateResult(estimate=estimate)
+    return PreviewEstimateResult(estimate=None)
+
+
+def _short_failure(message: str) -> str:
+    stripped = message.strip()
+    if not stripped:
+        return "could not prepare the plot"
+    line = stripped.splitlines()[0].strip()
+    if len(line) > 120:
+        return line[:117] + "..."
+    return line
 
 
 def _status_connected(status: PlotterStatus | None) -> bool:

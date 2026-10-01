@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -11,7 +12,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from plotpilot.models.plot_estimate import PlotEstimate, parse_preview_report
+from plotpilot.models.plot_estimate import (
+    PlotEstimate,
+    PreviewEstimateResult,
+    parse_preview_report,
+)
 from plotpilot.models.plot_job import PlotResult
 from plotpilot.models.plot_settings import (
     PlotSettings,
@@ -19,6 +24,8 @@ from plotpilot.models.plot_settings import (
     build_axicli_preview_argv,
 )
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
+
+logger = logging.getLogger(__name__)
 
 CliRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
 
@@ -66,6 +73,13 @@ def _default_runner(argv: list[str], timeout: float) -> subprocess.CompletedProc
         timeout=timeout,
         check=False,
     )
+
+
+def _brief_process_output(blob: str) -> str:
+    text = " ".join(blob.split())
+    if len(text) > 300:
+        return text[:300] + "…"
+    return text
 
 
 def _combined_output(result: subprocess.CompletedProcess[str] | None) -> str:
@@ -286,21 +300,51 @@ class AxiDrawCliBackend:
         *,
         settings: PlotSettings | None = None,
     ) -> PlotEstimate | None:
+        return self.estimate_preview(svg_path, settings=settings).estimate
+
+    def estimate_preview(
+        self,
+        svg_path: Path,
+        *,
+        settings: PlotSettings | None = None,
+    ) -> PreviewEstimateResult:
+        """Run axicli ``-v -T``. ``failure`` is a short UI reason, not raw stderr."""
         cli = self._resolve_cli()
         if cli is None:
-            return None
+            logger.warning("axicli preview skipped: executable not found")
+            return PreviewEstimateResult(failure="axicli was not found")
         try:
             argv = build_axicli_preview_argv(cli, svg_path, settings)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            return PreviewEstimateResult(failure=str(exc))
         try:
             proc = self._runner(argv, self.timeout_seconds)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
+        except subprocess.TimeoutExpired:
+            logger.warning("axicli preview timed out for %s", svg_path)
+            return PreviewEstimateResult(failure="axicli timed out")
+        except OSError as exc:
+            logger.warning("axicli preview could not start: %s", exc)
+            return PreviewEstimateResult(failure="axicli could not be started")
         blob = _combined_output(proc)
         if proc.returncode != 0:
-            return None
-        return parse_preview_report(blob)
+            logger.warning(
+                "axicli preview exit %s for %s: %s",
+                proc.returncode,
+                svg_path,
+                _brief_process_output(blob),
+            )
+            return PreviewEstimateResult(
+                failure=f"axicli returned exit code {proc.returncode}",
+            )
+        estimate = parse_preview_report(blob)
+        if estimate is None:
+            logger.warning(
+                "axicli preview had no readable time report for %s: %s",
+                svg_path,
+                _brief_process_output(blob),
+            )
+            return PreviewEstimateResult(failure="could not read the axicli time report")
+        return PreviewEstimateResult(estimate=estimate)
 
     def cancel_plot(self) -> None:
         proc = self._plot_process

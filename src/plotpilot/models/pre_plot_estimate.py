@@ -30,19 +30,21 @@ def running_pre_plot_estimate(layer_count: int) -> PrePlotEstimateReport:
 
 
 def build_pre_plot_estimate_report(
-    layers: list[tuple[str, PlotEstimate | None]],
+    layers: list[tuple[str, PlotEstimate | None, str | None]],
 ) -> PrePlotEstimateReport:
-    """Sum successful layer estimates. ``None`` means that layer could not be estimated."""
+    """Sum successful layer estimates.
+
+    The third tuple item is a short failure reason. It is shown in the UI and
+    must not be raw axicli stderr.
+    """
     if not layers:
         return PrePlotEstimateReport(state="failed", summary="Nothing to estimate.")
 
-    available = [(name, estimate) for name, estimate in layers if estimate is not None]
-    missing = [name for name, estimate in layers if estimate is None]
+    available = [(name, estimate) for name, estimate, _reason in layers if estimate is not None]
     if not available:
-        names = ", ".join(missing)
         return PrePlotEstimateReport(
             state="failed",
-            summary=f"Estimate unavailable ({names}).",
+            summary=_unavailable_summary(layers),
             layer_count=len(layers),
         )
 
@@ -54,9 +56,12 @@ def build_pre_plot_estimate_report(
     if len(layers) == 1:
         lines.append(f"Drawing estimate: {format_plot_duration(drawing_seconds)}")
     else:
-        for name, estimate in layers:
+        for name, estimate, reason in layers:
             if estimate is None:
-                lines.append(f"{name}: unavailable")
+                if reason:
+                    lines.append(f"{name}: unavailable — {reason}")
+                else:
+                    lines.append(f"{name}: unavailable")
             else:
                 lines.append(f"{name}: {format_plot_duration(estimate.duration_seconds)}")
         lines.append(f"Total drawing: {format_plot_duration(drawing_seconds)}")
@@ -66,8 +71,6 @@ def build_pre_plot_estimate_report(
         lines.append(f"Pen down: {_format_meters(pen_down)}")
     if pen_up is not None:
         lines.append(f"Pen up: {_format_meters(pen_up)}")
-    if missing and len(layers) == 1:
-        lines.append("Estimate unavailable.")
 
     return PrePlotEstimateReport(
         state="ready",
@@ -77,6 +80,22 @@ def build_pre_plot_estimate_report(
         pen_up_distance_m=pen_up,
         layer_count=len(layers),
     )
+
+
+def _unavailable_summary(
+    layers: list[tuple[str, PlotEstimate | None, str | None]],
+) -> str:
+    reasons = [reason for _name, estimate, reason in layers if estimate is None and reason]
+    unique: list[str] = []
+    for reason in reasons:
+        if reason not in unique:
+            unique.append(reason)
+    if len(unique) == 1:
+        return f"Estimate unavailable — {unique[0]}"
+    if unique:
+        return "Estimate unavailable — " + "; ".join(unique)
+    names = ", ".join(name for name, estimate, _reason in layers if estimate is None)
+    return f"Estimate unavailable ({names})."
 
 
 def _sum_optional(values: list[float | None]) -> float | None:
