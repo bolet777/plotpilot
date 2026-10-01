@@ -42,10 +42,15 @@ from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.bounds_service import check_plot_bounds
+from plotpilot.services.layer_geometry import LayerGeometryCache
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
-from plotpilot.services.preview_prepared_service import build_prepared_layer_preview
+from plotpilot.services.preview_compute_service import (
+    InteractivePreview,
+    PreviewComputeService,
+    compute_interactive_preview,
+)
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
@@ -158,6 +163,9 @@ class MainWindow(QMainWindow):
         self._multi_layer_service = MultiLayerPlotService(self._plotter_service, parent=self)
         self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
         self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
+        self._geometry_cache = LayerGeometryCache()
+        self._preview_compute = PreviewComputeService(parent=self)
+        self._preview_compute.finished.connect(self._on_preview_compute_finished)
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -440,6 +448,8 @@ class MainWindow(QMainWindow):
         return self._project_dirty
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        self._preview_prep_timer.stop()
+        self._preview_compute.shutdown()
         self._plotter_service.shutdown()
         super().closeEvent(event)
 
@@ -1109,7 +1119,9 @@ class MainWindow(QMainWindow):
         layer = self._layers[row]
         svg_text = preview_svg_for_layer(self._document, layer)
         self._preview.set_preview_svg(svg_text)
-        self._refresh_prepared_preview()
+        self._geometry_cache.invalidate()
+        self._preview.clear_clipped_plot()
+        self._schedule_prepared_preview_refresh()
 
     def _schedule_prepared_preview_refresh(self) -> None:
         if self._document is None or not self._layers:
@@ -1134,30 +1146,55 @@ class MainWindow(QMainWindow):
         if row < 0 or row >= len(self._layers):
             return
 
+        document = self._document
         layer = self._layers[row]
-        prepared_preview = build_prepared_layer_preview(
-            self._document,
-            layer,
-            plot_settings=self._settings_service.plot_settings,
-            transform=self._preview.artwork_transform,
-            fallback=self._settings_service.preview_fallback_work_area,
-            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
-        )
+        transform = self._preview.artwork_transform
+        plot_settings = self._settings_service.plot_settings
+        fallback = self._settings_service.preview_fallback_work_area
+        fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
+        cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
-        work_area = resolve_preview_work_area(
-            self._settings_service.plot_settings,
-            fallback=self._settings_service.preview_fallback_work_area,
-            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
-        )
-        if (
-            prepared_preview.page_width_mm > 0
-            and prepared_preview.page_height_mm > 0
-            and work_area is not None
-        ):
+        def operation() -> InteractivePreview:
+            return compute_interactive_preview(
+                document,
+                layer,
+                cached_geometry=cached,
+                transform=transform,
+                plot_settings=plot_settings,
+                fallback=fallback,
+                fallback_orientation=fallback_orientation,
+            )
+
+        self._preview_compute.submit(operation)
+
+    def _on_preview_compute_finished(self, generation: int, result: object) -> None:
+        if not self._preview_compute.gate.accept(generation):
+            return
+        if isinstance(result, Exception):
+            message = str(result) or "Preview preparation failed."
+            self._preview.set_clipped_plot(
+                polylines=(),
+                error_message=message,
+                status_lines=(message,),
+            )
+            return
+        if not isinstance(result, InteractivePreview):
+            return
+        if self._document is None or id(self._document) != result.document_id:
+            return
+        if result.fresh_geometry is not None:
+            self._geometry_cache.prepare_count += 1
+            self._geometry_cache.store(
+                result.document_id,
+                result.layer_id,
+                result.fresh_geometry,
+            )
+        self._geometry_cache.clip_count += 1
+        if result.page_width_mm > 0 and result.page_height_mm > 0 and result.work_area is not None:
             self._preview.set_work_area_overlay(
-                svg_width_mm=prepared_preview.page_width_mm,
-                svg_height_mm=prepared_preview.page_height_mm,
-                work_area=work_area,
+                svg_width_mm=result.page_width_mm,
+                svg_height_mm=result.page_height_mm,
+                work_area=result.work_area,
             )
         else:
             self._preview.set_work_area_overlay(
@@ -1165,12 +1202,10 @@ class MainWindow(QMainWindow):
                 svg_height_mm=0.0,
                 work_area=None,
             )
-
-        prepared_svg = prepared_preview.prepared.svg_text if prepared_preview.prepared else None
-        self._preview.set_prepared_plot(
-            prepared_svg=prepared_svg,
-            error_message=prepared_preview.preparation_error,
-            status_lines=prepared_preview.status_lines,
+        self._preview.set_clipped_plot(
+            polylines=result.clipped.polylines,
+            error_message=result.clipped.error_message,
+            status_lines=result.status_lines,
         )
         self._refresh_artwork_status()
 

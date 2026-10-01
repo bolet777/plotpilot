@@ -5,7 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QResizeEvent
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QResizeEvent,
+)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
@@ -52,6 +61,17 @@ def svg_render_source_size(renderer: QSvgRenderer) -> tuple[float, float]:
     return 0.0, 0.0
 
 
+def _polygons_from_polylines(
+    polylines: tuple[tuple[tuple[float, float], ...], ...],
+) -> list[QPolygonF]:
+    polygons: list[QPolygonF] = []
+    for subpath in polylines:
+        if len(subpath) < 2:
+            continue
+        polygons.append(QPolygonF([QPointF(x, y) for x, y in subpath]))
+    return polygons
+
+
 @dataclass(slots=True)
 class _PhysicalPreviewState:
     svg_width_mm: float
@@ -82,6 +102,10 @@ class LayerPreviewWidget(QWidget):
         self._transform_controls_enabled = True
         self._dragging = False
         self._drag_last_px: QPointF | None = None
+        self._clipped_polylines: tuple[tuple[tuple[float, float], ...], ...] = ()
+        self._clipped_polygons: list[QPolygonF] = []
+        self._plot_pixmap: QPixmap | None = None
+        self._plot_pixmap_key: tuple[int, int, int, int] | None = None
 
     @property
     def last_svg(self) -> str | None:
@@ -113,6 +137,10 @@ class LayerPreviewWidget(QWidget):
         self._prepared_error = None
         self._status_lines = ()
         self._physical = None
+        self._clipped_polylines = ()
+        self._clipped_polygons = []
+        self._plot_pixmap = None
+        self._plot_pixmap_key = None
         self.update()
 
     def set_preview_svg(self, svg_text: str) -> bool:
@@ -142,6 +170,10 @@ class LayerPreviewWidget(QWidget):
         """Set clipped machine-space plot SVG (same bytes sent toward axicli)."""
         self._prepared_error = error_message
         self._status_lines = status_lines
+        self._clipped_polylines = ()
+        self._clipped_polygons = []
+        self._plot_pixmap = None
+        self._plot_pixmap_key = None
         self._prepared_svg = prepared_svg
         if prepared_svg:
             renderer = QSvgRenderer(QByteArray(prepared_svg.encode("utf-8")), self)
@@ -157,6 +189,36 @@ class LayerPreviewWidget(QWidget):
         elif error_message:
             self._message = error_message
         self.update()
+
+    def set_clipped_plot(
+        self,
+        *,
+        polylines: tuple[tuple[tuple[float, float], ...], ...] | None,
+        error_message: str | None,
+        status_lines: tuple[str, ...] = (),
+    ) -> None:
+        """Show already-clipped machine-space polylines. Does not parse SVG."""
+        self._prepared_error = error_message
+        self._status_lines = status_lines
+        self._prepared_svg = None
+        self._prepared_renderer = QSvgRenderer(self)
+        self._clipped_polylines = polylines or ()
+        self._clipped_polygons = _polygons_from_polylines(self._clipped_polylines)
+        self._plot_pixmap = None
+        self._plot_pixmap_key = None
+        if self._context_renderer.isValid():
+            self._message = None
+        elif error_message:
+            self._message = error_message
+        self.update()
+
+    def clear_clipped_plot(self) -> None:
+        """Drop plotted ink while a new layer is prepared. Context SVG stays."""
+        self.set_clipped_plot(polylines=(), error_message=None, status_lines=())
+
+    @property
+    def clipped_polylines(self) -> tuple[tuple[tuple[float, float], ...], ...]:
+        return self._clipped_polylines
 
     @property
     def artwork_transform(self) -> ArtworkTransform:
@@ -193,6 +255,8 @@ class LayerPreviewWidget(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._plot_pixmap = None
+        self._plot_pixmap_key = None
         self.update()
 
     def _available_rect(self) -> QRectF:
@@ -352,7 +416,11 @@ class LayerPreviewWidget(QWidget):
             self._context_renderer.render(painter, page_target)
             painter.restore()
 
-        if self._prepared_renderer.isValid() and work_w_px > 0 and work_h_px > 0:
+        if self._clipped_polygons and work_w_px > 0 and work_h_px > 0:
+            pixmap = self._plot_pixmap_for(work_w_px, work_h_px, scale_px)
+            if pixmap is not None:
+                painter.drawPixmap(QPointF(0.0, 0.0), pixmap)
+        elif self._prepared_renderer.isValid() and work_w_px > 0 and work_h_px > 0:
             painter.save()
             painter.setClipRect(work_target)
             self._prepared_renderer.render(painter, work_target)
@@ -382,9 +450,46 @@ class LayerPreviewWidget(QWidget):
                 font.setPointSize(max(font.pointSize() - 1, 8))
                 painter.setFont(font)
                 label_rect = QRectF(wx + 4.0, wy + 2.0, ww - 8.0, 16.0)
-                painter.drawText(
-                    label_rect,
-                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-                    label,
-                )
+            painter.drawText(
+                label_rect,
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
+                label,
+            )
         painter.restore()
+
+    def _plot_pixmap_for(
+        self,
+        work_w_px: float,
+        work_h_px: float,
+        mm_to_px: float,
+    ) -> QPixmap | None:
+        """Rasterize clipped strokes once per geometry or widget size."""
+        if not self._clipped_polygons or work_w_px < 1.0 or work_h_px < 1.0 or mm_to_px <= 0:
+            return None
+        dpr = self.devicePixelRatioF()
+        key = (
+            round(work_w_px),
+            round(work_h_px),
+            round(dpr * 100),
+            id(self._clipped_polygons),
+        )
+        if self._plot_pixmap is not None and self._plot_pixmap_key == key:
+            return self._plot_pixmap
+
+        pixmap = QPixmap(max(1, int(work_w_px * dpr)), max(1, int(work_h_px * dpr)))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        plot_painter = QPainter(pixmap)
+        plot_painter.setClipRect(QRectF(0.0, 0.0, work_w_px, work_h_px))
+        plot_painter.scale(mm_to_px, mm_to_px)
+        pen = QPen(QColor("#000000"))
+        pen.setWidthF(0.2)
+        plot_painter.setPen(pen)
+        plot_painter.setBrush(Qt.BrushStyle.NoBrush)
+        for polygon in self._clipped_polygons:
+            if polygon.size() >= 2:
+                plot_painter.drawPolyline(polygon)
+        plot_painter.end()
+        self._plot_pixmap = pixmap
+        self._plot_pixmap_key = key
+        return pixmap

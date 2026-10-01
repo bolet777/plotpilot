@@ -37,6 +37,48 @@ class PreparedPlotSvg:
     path_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class FlattenedDocumentGeometry:
+    """Stroked subpaths flattened in physical document millimeters, before placement."""
+
+    page_width_mm: float
+    page_height_mm: float
+    polylines: tuple[tuple[tuple[float, float], ...], ...]
+
+
+def flatten_document_geometry(svg_text: str) -> FlattenedDocumentGeometry:
+    """Parse and flatten stroked curves once, in document millimeters."""
+    try:
+        page = parse_page_geometry(svg_text)
+    except PlotDimensionError as exc:
+        raise PlotViewportError(exc.user_message) from exc
+
+    svg_root = SVG.parse(io.StringIO(svg_text))
+    to_mm = _SvgToMm.from_page(page, svg_root)
+    subpaths = _flatten_document_subpaths(svg_root, to_mm)
+    return FlattenedDocumentGeometry(
+        page_width_mm=page.width_mm,
+        page_height_mm=page.height_mm,
+        polylines=tuple(tuple(points) for points in subpaths),
+    )
+
+
+def clip_document_polylines(
+    polylines: tuple[tuple[tuple[float, float], ...], ...] | list[list[tuple[float, float]]],
+    transform: ArtworkTransform,
+    *,
+    viewport_width_mm: float,
+    viewport_height_mm: float,
+) -> list[tuple[tuple[float, float], ...]]:
+    """Place document polylines and clip them to the machine viewport."""
+    transform.validate()
+    if viewport_width_mm <= 0 or viewport_height_mm <= 0:
+        msg = "Plot viewport size must be positive."
+        raise PlotViewportError(msg)
+    clip = ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm)
+    return _clip_document_subpaths(polylines, transform, clip)
+
+
 def prepare_positioned_plot_svg(
     svg_text: str,
     *,
@@ -50,29 +92,33 @@ def prepare_positioned_plot_svg(
         msg = "Plot viewport size must be positive."
         raise PlotViewportError(msg)
 
-    try:
-        page = parse_page_geometry(svg_text)
-    except PlotDimensionError as exc:
-        raise PlotViewportError(exc.user_message) from exc
-
-    svg_root = SVG.parse(io.StringIO(svg_text))
-    to_mm = _SvgToMm.from_page(page, svg_root)
-
-    clip = ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm)
-    clipped_paths = _clip_svg_geometry(
-        svg_root,
-        to_mm,
+    flattened = flatten_document_geometry(svg_text)
+    clipped_paths = _clip_document_subpaths(
+        flattened.polylines,
         transform,
-        clip,
+        ClipRect(0.0, 0.0, viewport_width_mm, viewport_height_mm),
     )
 
+    return emit_validated_plot_svg(
+        clipped_paths,
+        viewport_width_mm=viewport_width_mm,
+        viewport_height_mm=viewport_height_mm,
+    )
+
+
+def emit_validated_plot_svg(
+    clipped_paths: list[tuple[tuple[float, float], ...]] | list[list[tuple[float, float]]],
+    *,
+    viewport_width_mm: float,
+    viewport_height_mm: float,
+) -> PreparedPlotSvg:
+    """Emit machine-space SVG and run the final geometry safety check."""
     if not clipped_paths:
         msg = "No artwork intersects the plot area."
         raise PlotViewportError(msg)
 
     out_svg = _emit_svg(clipped_paths, viewport_width_mm, viewport_height_mm)
     _validate_output_geometry(out_svg, viewport_width_mm, viewport_height_mm)
-
     return PreparedPlotSvg(
         svg_text=out_svg,
         width_mm=viewport_width_mm,
@@ -109,42 +155,19 @@ class _SvgToMm:
         )
 
 
-def _clip_svg_geometry(
+def _flatten_document_subpaths(
     svg: SVG,
     to_mm: _SvgToMm,
-    transform: ArtworkTransform,
-    clip: ClipRect,
 ) -> list[list[tuple[float, float]]]:
-    output_paths: list[list[tuple[float, float]]] = []
+    """Walk stroked geometry and return document-mm subpaths, unclipped."""
+    subpaths: list[list[tuple[float, float]]] = []
     current: list[tuple[float, float]] = []
 
     def flush() -> None:
         nonlocal current
-        sanitized = _sanitize_polyline(current)
-        if sanitized is not None:
-            output_paths.append(sanitized)
+        if len(current) >= 2:
+            subpaths.append(current)
         current = []
-
-    def plot_segment(x0_mm: float, y0_mm: float, x1_mm: float, y1_mm: float) -> None:
-        nonlocal current
-        ax0, ay0 = transform.apply_point(x0_mm, y0_mm)
-        ax1, ay1 = transform.apply_point(x1_mm, y1_mm)
-        ax0, ay0 = _snap_point_to_clip(ax0, ay0, clip)
-        ax1, ay1 = _snap_point_to_clip(ax1, ay1, clip)
-        accept, nx0, ny0, nx1, ny1 = clip_segment(ax0, ay0, ax1, ay1, clip)
-        if not accept:
-            flush()
-            return
-        if _points_near((nx0, ny0), (nx1, ny1)):
-            return
-        if not current:
-            current = [(nx0, ny0), (nx1, ny1)]
-        elif _points_near(current[-1], (nx0, ny0)):
-            if not _points_near(current[-1], (nx1, ny1)):
-                current.append((nx1, ny1))
-        else:
-            flush()
-            current = [(nx0, ny0), (nx1, ny1)]
 
     for element in svg.elements():
         if isinstance(element, (SVG, Group)):
@@ -166,7 +189,10 @@ def _clip_svg_geometry(
 
             if isinstance(segment, Close):
                 if cursor_mm is not None and subpath_start is not None:
-                    plot_segment(cursor_mm[0], cursor_mm[1], subpath_start[0], subpath_start[1])
+                    if not current:
+                        current = [cursor_mm, subpath_start]
+                    else:
+                        current.append(subpath_start)
                 flush()
                 cursor_mm = subpath_start
                 continue
@@ -177,9 +203,68 @@ def _clip_svg_geometry(
             if cursor_mm is None:
                 cursor_mm = points[0]
             for px, py in points[1:]:
-                plot_segment(cursor_mm[0], cursor_mm[1], px, py)
-                cursor_mm = (px, py)
+                point = (px, py)
+                if not current:
+                    current = [cursor_mm, point]
+                else:
+                    current.append(point)
+                cursor_mm = point
 
+        flush()
+
+    return subpaths
+
+
+def _clip_document_subpaths(
+    polylines: tuple[tuple[tuple[float, float], ...], ...] | list[list[tuple[float, float]]],
+    transform: ArtworkTransform,
+    clip: ClipRect,
+) -> list[tuple[tuple[float, float], ...]]:
+    """Apply placement and Liang–Barsky clipping to pre-flattened document polylines."""
+    transform.validate()
+    origin_x = transform.x_mm
+    origin_y = transform.y_mm
+    scale = transform.scale
+    output_paths: list[tuple[tuple[float, float], ...]] = []
+    current: list[tuple[float, float]] = []
+
+    def flush() -> None:
+        nonlocal current
+        sanitized = _sanitize_polyline(current)
+        if sanitized is not None:
+            output_paths.append(tuple(sanitized))
+        current = []
+
+    def plot_segment(x0_mm: float, y0_mm: float, x1_mm: float, y1_mm: float) -> None:
+        nonlocal current
+        ax0 = origin_x + x0_mm * scale
+        ay0 = origin_y + y0_mm * scale
+        ax1 = origin_x + x1_mm * scale
+        ay1 = origin_y + y1_mm * scale
+        ax0, ay0 = _snap_point_to_clip(ax0, ay0, clip)
+        ax1, ay1 = _snap_point_to_clip(ax1, ay1, clip)
+        accept, nx0, ny0, nx1, ny1 = clip_segment(ax0, ay0, ax1, ay1, clip)
+        if not accept:
+            flush()
+            return
+        if _points_near((nx0, ny0), (nx1, ny1)):
+            return
+        if not current:
+            current = [(nx0, ny0), (nx1, ny1)]
+        elif _points_near(current[-1], (nx0, ny0)):
+            if not _points_near(current[-1], (nx1, ny1)):
+                current.append((nx1, ny1))
+        else:
+            flush()
+            current = [(nx0, ny0), (nx1, ny1)]
+
+    for subpath in polylines:
+        if len(subpath) < 2:
+            continue
+        previous = subpath[0]
+        for point in subpath[1:]:
+            plot_segment(previous[0], previous[1], point[0], point[1])
+            previous = point
         flush()
 
     return output_paths
@@ -294,7 +379,11 @@ def _flatness_rendered_units(to_mm: _SvgToMm, flatness_mm: float) -> float:
     return flatness_mm / mm_per_rendered
 
 
-def _emit_svg(paths: list[list[tuple[float, float]]], width_mm: float, height_mm: float) -> str:
+def _emit_svg(
+    paths: list[tuple[tuple[float, float], ...]] | list[list[tuple[float, float]]],
+    width_mm: float,
+    height_mm: float,
+) -> str:
     path_tags: list[str] = []
     for subpath in paths:
         if len(subpath) < 2:
