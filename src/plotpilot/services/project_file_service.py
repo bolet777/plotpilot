@@ -9,7 +9,7 @@ from typing import Any
 from plotpilot.models.artwork_transform import ArtworkTransform, ArtworkTransformError
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
 from plotpilot.models.project_session import ProjectSession
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 
 FORMAT_ID = "plotpilot-project"
 SUPPORTED_VERSION = 1
@@ -73,7 +73,10 @@ def session_to_document(
             "pen_pos_down": settings.pen_pos_down,
             "const_speed": settings.const_speed,
         },
-        "preview": {"fallback_work_area": session.fallback_work_area.value},
+        "preview": {
+            "fallback_work_area": session.fallback_work_area.value,
+            "fallback_work_area_orientation": session.fallback_work_area_orientation.value,
+        },
     }
 
 
@@ -159,7 +162,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
             raise ProjectFileError("Artwork transform in this project file is invalid.") from exc
 
     plot_settings = _parse_plot_settings(data.get("plot_settings"))
-    fallback = _parse_fallback(data.get("preview"))
+    fallback, fallback_orientation = _parse_preview(data.get("preview"))
 
     return ProjectSession(
         svg_path=svg_path,
@@ -167,6 +170,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         artwork_transform=artwork_transform,
         plot_settings=plot_settings,
         fallback_work_area=fallback,
+        fallback_work_area_orientation=fallback_orientation,
     )
 
 
@@ -203,13 +207,22 @@ def _parse_plot_settings(block: object) -> PlotSettings:
     return settings
 
 
-def _parse_fallback(block: object) -> FallbackWorkArea:
+def _parse_preview(
+    block: object,
+) -> tuple[FallbackWorkArea, WorkAreaOrientation]:
     if block is None or not isinstance(block, dict):
-        return FallbackWorkArea.A4
+        return FallbackWorkArea.A4, WorkAreaOrientation.PORTRAIT
     raw = block.get("fallback_work_area")
     if raw == FallbackWorkArea.A3.value:
-        return FallbackWorkArea.A3
-    return FallbackWorkArea.A4
+        fallback = FallbackWorkArea.A3
+    else:
+        fallback = FallbackWorkArea.A4
+    orientation_raw = block.get("fallback_work_area_orientation")
+    if orientation_raw == WorkAreaOrientation.LANDSCAPE.value:
+        orientation = WorkAreaOrientation.LANDSCAPE
+    else:
+        orientation = WorkAreaOrientation.PORTRAIT
+    return fallback, orientation
 
 
 def _legacy_path_reordering(block: dict[str, Any]) -> int | None:

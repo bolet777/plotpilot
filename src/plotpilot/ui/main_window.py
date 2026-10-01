@@ -5,12 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QObject, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
+    QApplication,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,18 +30,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from plotpilot.models.artwork_transform import (
-    DEFAULT_SCALE_MAX,
-    DEFAULT_SCALE_MIN,
-    ArtworkTransform,
-    scale_percent,
-    transform_from_scale_percent,
-)
+from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -42,13 +49,19 @@ from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.bounds_service import check_plot_bounds
+from plotpilot.services.layer_geometry import LayerGeometryCache
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
-from plotpilot.services.preview_prepared_service import build_prepared_layer_preview
+from plotpilot.services.preview_compute_service import (
+    InteractivePreview,
+    PreviewComputeService,
+    compute_interactive_preview,
+)
 from plotpilot.services.preview_service import preview_svg_for_layer
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
+    WorkAreaOrientation,
     preview_work_area_is_ambiguous,
     resolve_preview_work_area,
 )
@@ -61,6 +74,7 @@ from plotpilot.services.project_file_service import (
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.ui.artwork_transform_controls import ArtworkTransformControls
 from plotpilot.ui.plot_progress_labels import (
     progress_fraction_label,
     progress_headline,
@@ -69,6 +83,69 @@ from plotpilot.ui.plot_progress_labels import (
 )
 from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
+
+_PREFERRED_WINDOW_WIDTH = 900
+_PREFERRED_WINDOW_HEIGHT = 560
+_MINIMUM_WINDOW_WIDTH = 480
+_MINIMUM_WINDOW_HEIGHT = 320
+
+
+def window_size_bounds(
+    available_width: int | None,
+    available_height: int | None,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ``(minimum, initial)`` sizes clamped to the usable screen.
+
+    ``available_*`` should already exclude the menu bar and Dock. The initial
+    size stays 900×560 when that fits, and never exceeds the usable screen.
+    """
+    min_w = _MINIMUM_WINDOW_WIDTH
+    min_h = _MINIMUM_WINDOW_HEIGHT
+    width = _PREFERRED_WINDOW_WIDTH
+    height = _PREFERRED_WINDOW_HEIGHT
+    if available_width is not None and available_width > 0:
+        min_w = min(min_w, available_width)
+        width = min(width, available_width)
+    if available_height is not None and available_height > 0:
+        min_h = min(min_h, available_height)
+        height = min(height, available_height)
+    return (min_w, min_h), (max(width, min_w), max(height, min_h))
+
+
+class _MainContentScrollArea(QScrollArea):
+    """Page scroller whose minimum size does not follow the document size."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt API
+        return QSize(0, 0)
+
+
+class _LayerListWheelFilter(QObject):
+    """Forward wheel events to the page when the layer list cannot scroll."""
+
+    def __init__(self, scroll: QScrollArea) -> None:
+        super().__init__(scroll)
+        self._scroll = scroll
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 — Qt API
+        if not isinstance(watched, QListWidget) or not isinstance(event, QWheelEvent):
+            return False
+        delta = event.angleDelta()
+        pixels = event.pixelDelta()
+        wants_vertical = delta.y() != 0 or pixels.y() != 0
+        wants_horizontal = delta.x() != 0 or pixels.x() != 0
+        if not wants_vertical and not wants_horizontal:
+            return False
+        vertical = watched.verticalScrollBar()
+        horizontal = watched.horizontalScrollBar()
+        list_scrolls_vertically = vertical.maximum() > vertical.minimum() and wants_vertical
+        list_scrolls_horizontally = horizontal.maximum() > horizontal.minimum() and wants_horizontal
+        if list_scrolls_vertically or list_scrolls_horizontally:
+            return False
+        viewport = self._scroll.viewport()
+        if viewport is None:
+            return False
+        QApplication.sendEvent(viewport, event)
+        return True
 
 
 def choose_svg_file(parent: QWidget) -> str | None:
@@ -126,7 +203,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("PlotPilot")
-        self.resize(900, 560)
 
         self._document: SvgDocument | None = None
         self._layers: list[SvgLayer] = []
@@ -157,17 +233,21 @@ class MainWindow(QMainWindow):
         self._multi_layer_service = MultiLayerPlotService(self._plotter_service, parent=self)
         self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
         self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
+        self._geometry_cache = LayerGeometryCache()
+        self._preview_compute = PreviewComputeService(parent=self)
+        self._preview_compute.finished.connect(self._on_preview_compute_finished)
 
-        central = QWidget(self)
-        root_layout = QVBoxLayout(central)
+        content = QWidget()
+        content.setObjectName("mainContent")
+        root_layout = QVBoxLayout(content)
 
         content_row = QHBoxLayout()
         left_column = QVBoxLayout()
-        layers_heading = QLabel("Layers", central)
+        layers_heading = QLabel("Layers", content)
         layers_heading.setStyleSheet("font-weight: bold;")
         left_column.addWidget(layers_heading)
 
-        self._layers_list = QListWidget(central)
+        self._layers_list = QListWidget(content)
         self._layers_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._layers_list.setMinimumWidth(220)
         self._layers_list.currentRowChanged.connect(self._on_layer_row_changed)
@@ -179,14 +259,14 @@ class MainWindow(QMainWindow):
         preview_column = QVBoxLayout()
         preview_column.setSpacing(6)
 
-        self._open_svg_persistent_button = QPushButton("Open SVG…", central)
+        self._open_svg_persistent_button = QPushButton("Open SVG…", content)
         self._open_svg_persistent_button.setVisible(False)
         preview_column.addWidget(
             self._open_svg_persistent_button,
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
 
-        self._fallback_work_area_row = QWidget(central)
+        self._fallback_work_area_row = QWidget(content)
         fallback_row = QHBoxLayout(self._fallback_work_area_row)
         fallback_row.setContentsMargins(0, 0, 0, 0)
         fallback_row.addWidget(QLabel("Work area:", self._fallback_work_area_row))
@@ -201,47 +281,26 @@ class MainWindow(QMainWindow):
             self._on_fallback_work_area_changed,
         )
         fallback_row.addWidget(self._fallback_work_area_combo)
+        self._fallback_work_area_orientation_combo = QComboBox(self._fallback_work_area_row)
+        for orientation in (WorkAreaOrientation.PORTRAIT, WorkAreaOrientation.LANDSCAPE):
+            self._fallback_work_area_orientation_combo.addItem(orientation.value, orientation)
+        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
+        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
+        if orientation_index >= 0:
+            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
+        self._fallback_work_area_orientation_combo.currentIndexChanged.connect(
+            self._on_fallback_work_area_orientation_changed,
+        )
+        fallback_row.addWidget(self._fallback_work_area_orientation_combo)
         fallback_row.addStretch(1)
         preview_column.addWidget(self._fallback_work_area_row)
 
-        self._position_row = QWidget(central)
-        position_layout = QHBoxLayout(self._position_row)
-        position_layout.setContentsMargins(0, 0, 0, 0)
-        position_layout.addWidget(QLabel("Position", self._position_row))
-        position_layout.addWidget(QLabel("X:", self._position_row))
-        self._artwork_x_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_x_spin.setRange(-2000.0, 2000.0)
-        self._artwork_x_spin.setSuffix(" mm")
-        self._artwork_x_spin.setDecimals(1)
-        self._artwork_x_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
-        position_layout.addWidget(self._artwork_x_spin)
-        position_layout.addWidget(QLabel("Y:", self._position_row))
-        self._artwork_y_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_y_spin.setRange(-2000.0, 2000.0)
-        self._artwork_y_spin.setSuffix(" mm")
-        self._artwork_y_spin.setDecimals(1)
-        self._artwork_y_spin.valueChanged.connect(self._on_artwork_position_spin_changed)
-        position_layout.addWidget(self._artwork_y_spin)
-        position_layout.addSpacing(8)
-        position_layout.addWidget(QLabel("Scale:", self._position_row))
-        self._artwork_scale_spin = QDoubleSpinBox(self._position_row)
-        self._artwork_scale_spin.setRange(DEFAULT_SCALE_MIN * 100.0, DEFAULT_SCALE_MAX * 100.0)
-        self._artwork_scale_spin.setSuffix(" %")
-        self._artwork_scale_spin.setDecimals(0)
-        self._artwork_scale_spin.valueChanged.connect(self._on_artwork_scale_spin_changed)
-        position_layout.addWidget(self._artwork_scale_spin)
-        self._artwork_reset_button = QPushButton("Reset", self._position_row)
-        self._artwork_reset_button.clicked.connect(self._on_artwork_reset)
-        position_layout.addWidget(self._artwork_reset_button)
-        position_layout.addStretch(1)
-        preview_column.addWidget(self._position_row)
+        self._artwork_controls = ArtworkTransformControls(content)
+        self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
+        preview_column.addWidget(self._artwork_controls)
 
-        self._artwork_status_label = QLabel("", central)
-        self._artwork_status_label.setWordWrap(True)
-        preview_column.addWidget(self._artwork_status_label)
-
-        self._preview_stack = QStackedWidget(central)
-        self._preview_empty_page = QWidget(central)
+        self._preview_stack = QStackedWidget(content)
+        self._preview_empty_page = QWidget(content)
         empty_layout = QVBoxLayout(self._preview_empty_page)
         empty_layout.addStretch(1)
         empty_heading = QLabel("No SVG loaded", self._preview_empty_page)
@@ -266,7 +325,7 @@ class MainWindow(QMainWindow):
         empty_layout.addWidget(empty_shortcut_hint)
         empty_layout.addStretch(1)
 
-        self._preview = LayerPreviewWidget(central)
+        self._preview = LayerPreviewWidget(content)
         self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
         self._preview_prep_timer = QTimer(self)
         self._preview_prep_timer.setSingleShot(True)
@@ -275,37 +334,38 @@ class MainWindow(QMainWindow):
         self._preview_stack.addWidget(self._preview_empty_page)
         self._preview_stack.addWidget(self._preview)
         self._sync_artwork_controls_from_preview()
+        self._refresh_artwork_transform_panel()
         preview_column.addWidget(self._preview_stack, stretch=1)
 
-        preview_column_host = QWidget(central)
+        preview_column_host = QWidget(content)
         preview_column_host.setLayout(preview_column)
         content_row.addWidget(preview_column_host, stretch=1)
 
         root_layout.addLayout(content_row, stretch=1)
 
-        plotter_heading = QLabel("Plotter", central)
+        plotter_heading = QLabel("Plotter", content)
         plotter_heading.setStyleSheet("font-weight: bold;")
         root_layout.addWidget(plotter_heading)
 
         plotter_row = QHBoxLayout()
-        self._plotter_name_label = QLabel("AxiDraw", central)
+        self._plotter_name_label = QLabel("AxiDraw", content)
         plotter_row.addWidget(self._plotter_name_label)
 
-        self._plotter_status_label = QLabel("○ Not connected", central)
+        self._plotter_status_label = QLabel("○ Not connected", content)
         self._plotter_status_label.setWordWrap(True)
         plotter_row.addWidget(self._plotter_status_label, stretch=1)
         root_layout.addLayout(plotter_row)
 
         plotter_buttons = QHBoxLayout()
-        self._pen_up_button = QPushButton("Pen ↑", central)
+        self._pen_up_button = QPushButton("Pen ↑", content)
         self._pen_up_button.clicked.connect(self._plotter_service.pen_up)
         plotter_buttons.addWidget(self._pen_up_button)
 
-        self._pen_down_button = QPushButton("Pen ↓", central)
+        self._pen_down_button = QPushButton("Pen ↓", content)
         self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
         plotter_buttons.addWidget(self._pen_down_button)
 
-        self._home_button = QPushButton("Home", central)
+        self._home_button = QPushButton("Home", content)
         self._home_button.setToolTip(
             "Return to the position where the motors were enabled (walk_home). "
             "Does not lower the pen.",
@@ -313,36 +373,36 @@ class MainWindow(QMainWindow):
         self._home_button.clicked.connect(self._on_home)
         plotter_buttons.addWidget(self._home_button)
 
-        self._motors_off_button = QPushButton("Motors Off", central)
+        self._motors_off_button = QPushButton("Motors Off", content)
         self._motors_off_button.setToolTip(
             "Disable the XY motors (disable_xy). Does not move the carriage or lower the pen.",
         )
         self._motors_off_button.clicked.connect(self._on_motors_off)
         plotter_buttons.addWidget(self._motors_off_button)
 
-        self._plotter_refresh_button = QPushButton("Refresh", central)
+        self._plotter_refresh_button = QPushButton("Refresh", content)
         self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
         plotter_buttons.addWidget(self._plotter_refresh_button)
 
-        self._plot_layer_button = QPushButton("Plot Selected Layer", central)
+        self._plot_layer_button = QPushButton("Plot Selected Layer", content)
         self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
         plotter_buttons.addWidget(self._plot_layer_button)
 
-        self._plot_checked_button = QPushButton("Plot Checked Layers", central)
+        self._plot_checked_button = QPushButton("Plot Checked Layers", content)
         self._plot_checked_button.clicked.connect(self._on_plot_checked_layers)
         plotter_buttons.addWidget(self._plot_checked_button)
 
-        self._plot_stop_button = QPushButton("Stop", central)
+        self._plot_stop_button = QPushButton("Stop", content)
         self._plot_stop_button.clicked.connect(self._on_stop_plot)
         self._plot_stop_button.setEnabled(False)
         plotter_buttons.addWidget(self._plot_stop_button)
 
-        self._multi_continue_button = QPushButton("Continue", central)
+        self._multi_continue_button = QPushButton("Continue", content)
         self._multi_continue_button.clicked.connect(self._on_multi_continue)
         self._multi_continue_button.setVisible(False)
         plotter_buttons.addWidget(self._multi_continue_button)
 
-        self._estimate_button = QPushButton("Estimate", central)
+        self._estimate_button = QPushButton("Estimate", content)
         self._estimate_button.setToolTip(
             "Estimate drawing time from the final clipped SVG (axicli -v -T). "
             "Pen-change pauses are not included.",
@@ -353,55 +413,68 @@ class MainWindow(QMainWindow):
         plotter_buttons.addStretch(1)
         root_layout.addLayout(plotter_buttons)
 
-        self._estimate_label = QLabel("", central)
+        self._estimate_label = QLabel("", content)
         self._estimate_label.setWordWrap(True)
         root_layout.addWidget(self._estimate_label)
 
-        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=central)
+        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=content)
         self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
         root_layout.addWidget(self._plot_settings)
 
-        self._bounds_status_label = QLabel("", central)
+        self._bounds_status_label = QLabel("", content)
         self._bounds_status_label.setWordWrap(True)
         root_layout.addWidget(self._bounds_status_label)
 
-        self._plot_progress_headline = QLabel("", central)
+        self._plot_progress_headline = QLabel("", content)
         self._plot_progress_headline.setWordWrap(True)
         self._plot_progress_headline.setVisible(False)
         root_layout.addWidget(self._plot_progress_headline)
 
-        self._plot_progress_bar = QProgressBar(central)
+        self._plot_progress_bar = QProgressBar(content)
         self._plot_progress_bar.setVisible(False)
         self._plot_progress_bar.setTextVisible(True)
         self._plot_progress_bar.setRange(0, 100)
         root_layout.addWidget(self._plot_progress_bar)
 
-        self._plot_progress_timing = QLabel("", central)
+        self._plot_progress_timing = QLabel("", content)
         self._plot_progress_timing.setVisible(False)
         root_layout.addWidget(self._plot_progress_timing)
 
-        self._plot_progress_next = QLabel("", central)
+        self._plot_progress_next = QLabel("", content)
         self._plot_progress_next.setVisible(False)
         root_layout.addWidget(self._plot_progress_next)
 
-        self._plot_activity_label = QLabel("", central)
+        self._plot_activity_label = QLabel("", content)
         self._plot_activity_label.setWordWrap(True)
         root_layout.addWidget(self._plot_activity_label)
 
-        self._pen_change_label = QLabel("", central)
+        self._pen_change_label = QLabel("", content)
         self._pen_change_label.setWordWrap(True)
         self._pen_change_label.setVisible(False)
         root_layout.addWidget(self._pen_change_label)
 
-        self._plotter_message_label = QLabel("", central)
+        self._plotter_message_label = QLabel("", content)
         self._plotter_message_label.setWordWrap(True)
         root_layout.addWidget(self._plotter_message_label)
 
-        self._status_label = QLabel("", central)
+        self._status_label = QLabel("", content)
         self._status_label.setWordWrap(True)
         root_layout.addWidget(self._status_label)
 
-        self.setCentralWidget(central)
+        scroll = _MainContentScrollArea(self)
+        scroll.setObjectName("mainContentScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        self._content_scroll = scroll
+        self._layer_list_wheel_filter = _LayerListWheelFilter(scroll)
+        self._layers_list.installEventFilter(self._layer_list_wheel_filter)
+        self.setCentralWidget(scroll)
         self._build_menu()
         self._open_svg_empty_button.clicked.connect(self._open_svg_action.trigger)
         self._open_svg_persistent_button.clicked.connect(self._open_svg_action.trigger)
@@ -418,6 +491,17 @@ class MainWindow(QMainWindow):
         self._update_plot_controls()
         self._plotter_service.start_automatic_monitoring()
         self._update_window_title()
+        self._apply_launch_geometry()
+
+    def _apply_launch_geometry(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        available = None if screen is None else screen.availableGeometry().size()
+        minimum, initial = window_size_bounds(
+            None if available is None else available.width(),
+            None if available is None else available.height(),
+        )
+        self.setMinimumSize(minimum[0], minimum[1])
+        self.resize(initial[0], initial[1])
 
     @property
     def project_file_path(self) -> Path | None:
@@ -428,6 +512,8 @@ class MainWindow(QMainWindow):
         return self._project_dirty
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        self._preview_prep_timer.stop()
+        self._preview_compute.shutdown()
         self._plotter_service.shutdown()
         super().closeEvent(event)
 
@@ -644,7 +730,7 @@ class MainWindow(QMainWindow):
         self._plot_settings.set_plotting_active(settings_locked)
         transform_locked = plot_active or job_active
         self._preview.set_transform_controls_enabled(not transform_locked)
-        self._position_row.setEnabled(not transform_locked)
+        self._artwork_controls.setEnabled(not transform_locked)
         self._open_svg_action.setEnabled(not job_active)
         has_document = self._document is not None
         self._save_project_action.setEnabled(has_document and not job_active)
@@ -724,6 +810,7 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error:
             self._estimate_label.setText(error)
@@ -758,6 +845,7 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -796,6 +884,7 @@ class MainWindow(QMainWindow):
             settings=settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -864,6 +953,7 @@ class MainWindow(QMainWindow):
         self._settings_service.begin_project_session(
             session.plot_settings,
             session.fallback_work_area,
+            session.fallback_work_area_orientation,
         )
         self._sync_fallback_combo_from_service()
         self._apply_document(document, reset_transform=False)
@@ -925,6 +1015,7 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             plot_settings=self._settings_service.plot_settings,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
+            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
 
     def _save_project(self) -> None:
@@ -954,6 +1045,7 @@ class MainWindow(QMainWindow):
             self._settings_service.begin_project_session(
                 self._settings_service.plot_settings,
                 self._settings_service.preview_fallback_work_area,
+                self._settings_service.preview_fallback_work_area_orientation,
             )
         self._save_project_at_path(path)
 
@@ -997,6 +1089,12 @@ class MainWindow(QMainWindow):
             self._fallback_work_area_combo.blockSignals(True)
             self._fallback_work_area_combo.setCurrentIndex(fallback_index)
             self._fallback_work_area_combo.blockSignals(False)
+        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
+        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
+        if orientation_index >= 0:
+            self._fallback_work_area_orientation_combo.blockSignals(True)
+            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
+            self._fallback_work_area_orientation_combo.blockSignals(False)
 
     def _mark_project_dirty(self) -> None:
         if self._document is None:
@@ -1085,7 +1183,9 @@ class MainWindow(QMainWindow):
         layer = self._layers[row]
         svg_text = preview_svg_for_layer(self._document, layer)
         self._preview.set_preview_svg(svg_text)
-        self._refresh_prepared_preview()
+        self._geometry_cache.invalidate()
+        self._preview.clear_clipped_plot()
+        self._schedule_prepared_preview_refresh()
 
     def _schedule_prepared_preview_refresh(self) -> None:
         if self._document is None or not self._layers:
@@ -1110,28 +1210,55 @@ class MainWindow(QMainWindow):
         if row < 0 or row >= len(self._layers):
             return
 
+        document = self._document
         layer = self._layers[row]
-        prepared_preview = build_prepared_layer_preview(
-            self._document,
-            layer,
-            plot_settings=self._settings_service.plot_settings,
-            transform=self._preview.artwork_transform,
-            fallback=self._settings_service.preview_fallback_work_area,
-        )
+        transform = self._preview.artwork_transform
+        plot_settings = self._settings_service.plot_settings
+        fallback = self._settings_service.preview_fallback_work_area
+        fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
+        cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
-        work_area = resolve_preview_work_area(
-            self._settings_service.plot_settings,
-            fallback=self._settings_service.preview_fallback_work_area,
-        )
-        if (
-            prepared_preview.page_width_mm > 0
-            and prepared_preview.page_height_mm > 0
-            and work_area is not None
-        ):
+        def operation() -> InteractivePreview:
+            return compute_interactive_preview(
+                document,
+                layer,
+                cached_geometry=cached,
+                transform=transform,
+                plot_settings=plot_settings,
+                fallback=fallback,
+                fallback_orientation=fallback_orientation,
+            )
+
+        self._preview_compute.submit(operation)
+
+    def _on_preview_compute_finished(self, generation: int, result: object) -> None:
+        if not self._preview_compute.gate.accept(generation):
+            return
+        if isinstance(result, Exception):
+            message = str(result) or "Preview preparation failed."
+            self._preview.set_clipped_plot(
+                polylines=(),
+                error_message=message,
+                status_lines=(message,),
+            )
+            return
+        if not isinstance(result, InteractivePreview):
+            return
+        if self._document is None or id(self._document) != result.document_id:
+            return
+        if result.fresh_geometry is not None:
+            self._geometry_cache.prepare_count += 1
+            self._geometry_cache.store(
+                result.document_id,
+                result.layer_id,
+                result.fresh_geometry,
+            )
+        self._geometry_cache.clip_count += 1
+        if result.page_width_mm > 0 and result.page_height_mm > 0 and result.work_area is not None:
             self._preview.set_work_area_overlay(
-                svg_width_mm=prepared_preview.page_width_mm,
-                svg_height_mm=prepared_preview.page_height_mm,
-                work_area=work_area,
+                svg_width_mm=result.page_width_mm,
+                svg_height_mm=result.page_height_mm,
+                work_area=result.work_area,
             )
         else:
             self._preview.set_work_area_overlay(
@@ -1139,27 +1266,38 @@ class MainWindow(QMainWindow):
                 svg_height_mm=0.0,
                 work_area=None,
             )
-
-        prepared_svg = prepared_preview.prepared.svg_text if prepared_preview.prepared else None
-        self._preview.set_prepared_plot(
-            prepared_svg=prepared_svg,
-            error_message=prepared_preview.preparation_error,
-            status_lines=prepared_preview.status_lines,
+        self._preview.set_clipped_plot(
+            polylines=result.clipped.polylines,
+            error_message=result.clipped.error_message,
+            status_lines=result.status_lines,
         )
-        self._refresh_artwork_status()
+        self._refresh_artwork_transform_panel()
 
     def _on_plot_settings_changed(self) -> None:
         self._mark_project_dirty()
         self._sync_fallback_work_area_visibility()
         self._refresh_bounds_status()
+        self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
     def _on_fallback_work_area_changed(self, _index: int) -> None:
-        area = self._fallback_work_area_combo.currentData()
-        if not isinstance(area, FallbackWorkArea):
+        area = _coerce_fallback_work_area(self._fallback_work_area_combo.currentData())
+        if area is None:
             return
         self._settings_service.set_preview_fallback_work_area(area)
         self._mark_project_dirty()
+        self._refresh_artwork_transform_panel()
+        self._schedule_prepared_preview_refresh()
+
+    def _on_fallback_work_area_orientation_changed(self, _index: int) -> None:
+        orientation = _coerce_work_area_orientation(
+            self._fallback_work_area_orientation_combo.currentData(),
+        )
+        if orientation is None:
+            return
+        self._settings_service.set_preview_fallback_work_area_orientation(orientation)
+        self._mark_project_dirty()
+        self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
 
     def _sync_fallback_work_area_visibility(self) -> None:
@@ -1176,37 +1314,39 @@ class MainWindow(QMainWindow):
             return
         self._refresh_prepared_preview()
 
-    def _refresh_artwork_status(self) -> None:
-        transform = self._preview.artwork_transform
+    def _refresh_artwork_transform_panel(self) -> None:
         work_area = resolve_preview_work_area(
             self._settings_service.plot_settings,
             fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
         )
         if work_area is None:
-            self._artwork_status_label.setText("")
+            self._artwork_controls.set_plot_area_text("")
+            self._artwork_controls.set_status_lines([])
             return
-        lines = [
-            f"Artwork — X: {transform.x_mm:.1f} mm, Y: {transform.y_mm:.1f} mm, "
-            f"Scale: {scale_percent(transform):.0f}%",
-            f"Plot area: {work_area.label}",
-        ]
+        self._artwork_controls.set_work_area_dimensions(
+            work_area.width_mm,
+            work_area.height_mm,
+        )
         if work_area.from_fallback:
-            lines.append("User-defined work area (not verified hardware).")
+            orientation = self._settings_service.preview_fallback_work_area_orientation
+            plot_line = (
+                f"Plot area: {self._settings_service.preview_fallback_work_area.value} "
+                f"{orientation.value} — {work_area.label.split(' — ', 1)[-1]}"
+            )
+        else:
+            plot_line = f"Plot area: {work_area.label}"
+        status_lines: list[str] = []
+        if work_area.from_fallback:
+            status_lines.append("User-defined work area (not verified hardware).")
         for line in self._preview.status_lines:
-            if line not in lines:
-                lines.append(line)
-        self._artwork_status_label.setText("\n".join(lines))
+            if line not in status_lines and line != plot_line:
+                status_lines.append(line)
+        self._artwork_controls.set_plot_area_text(plot_line)
+        self._artwork_controls.set_status_lines(status_lines)
 
     def _sync_artwork_controls_from_preview(self) -> None:
-        transform = self._preview.artwork_transform
-        for spin, value in (
-            (self._artwork_x_spin, transform.x_mm),
-            (self._artwork_y_spin, transform.y_mm),
-            (self._artwork_scale_spin, scale_percent(transform)),
-        ):
-            spin.blockSignals(True)
-            spin.setValue(value)
-            spin.blockSignals(False)
+        self._artwork_controls.set_transform(self._preview.artwork_transform)
 
     def _set_artwork_transform(
         self,
@@ -1227,26 +1367,10 @@ class MainWindow(QMainWindow):
             self._schedule_prepared_preview_refresh()
             self._mark_project_dirty()
 
-    def _on_artwork_position_spin_changed(self, _value: float) -> None:
-        moved = ArtworkTransform(
-            x_mm=self._artwork_x_spin.value(),
-            y_mm=self._artwork_y_spin.value(),
-            scale=self._preview.artwork_transform.scale,
-        )
-        self._set_artwork_transform(moved)
-
-    def _on_artwork_scale_spin_changed(self, value: float) -> None:
-        current = self._preview.artwork_transform
-        try:
-            scaled = transform_from_scale_percent(current, value)
-        except ValueError:
+    def _on_artwork_controls_changed(self, transform: ArtworkTransform) -> None:
+        if transform == self._preview.artwork_transform:
             return
-        self._set_artwork_transform(
-            ArtworkTransform(x_mm=current.x_mm, y_mm=current.y_mm, scale=scaled.scale),
-        )
-
-    def _on_artwork_reset(self) -> None:
-        self._set_artwork_transform(ArtworkTransform.identity())
+        self._set_artwork_transform(transform)
 
     def _refresh_bounds_status(self) -> None:
         document = self._document
@@ -1265,6 +1389,26 @@ class MainWindow(QMainWindow):
         self._bounds_status_label.setText(f"{prefix}{self._bounds_check.message}")
         self._bounds_status_label.setStyleSheet(f"color: {color};")
         self._update_plot_controls()
+
+
+def _coerce_fallback_work_area(value: object) -> FallbackWorkArea | None:
+    if isinstance(value, FallbackWorkArea):
+        return value
+    if value == FallbackWorkArea.A3.value:
+        return FallbackWorkArea.A3
+    if value == FallbackWorkArea.A4.value:
+        return FallbackWorkArea.A4
+    return None
+
+
+def _coerce_work_area_orientation(value: object) -> WorkAreaOrientation | None:
+    if isinstance(value, WorkAreaOrientation):
+        return value
+    if value == WorkAreaOrientation.LANDSCAPE.value:
+        return WorkAreaOrientation.LANDSCAPE
+    if value == WorkAreaOrientation.PORTRAIT.value:
+        return WorkAreaOrientation.PORTRAIT
+    return None
 
 
 def _bounds_status_style(status: BoundsStatus) -> tuple[str, str]:

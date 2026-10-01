@@ -9,12 +9,13 @@ from plotpilot.models.plot_settings import (
     PlotSettings,
     PlotSettingsValidationError,
 )
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 
 ORGANIZATION = "PlotPilot"
 APPLICATION = "PlotPilot"
 
 _KEY_PREVIEW_FALLBACK = "preview/fallback_work_area"
+_KEY_PREVIEW_FALLBACK_ORIENTATION = "preview/fallback_work_area_orientation"
 _KEY_PEN_DOWN = "plot/pen_down_speed"
 _KEY_PEN_UP = "plot/pen_up_speed"
 _KEY_ACCEL = "plot/acceleration"
@@ -45,6 +46,7 @@ class SettingsService(QObject):
         self._current = self._load()
         self._project_session_active = False
         self._session_fallback: FallbackWorkArea | None = None
+        self._session_fallback_orientation: WorkAreaOrientation | None = None
 
     @property
     def plot_settings(self) -> PlotSettings:
@@ -57,6 +59,12 @@ class SettingsService(QObject):
         return self._load_fallback_work_area()
 
     @property
+    def preview_fallback_work_area_orientation(self) -> WorkAreaOrientation:
+        if self._session_fallback_orientation is not None:
+            return self._session_fallback_orientation
+        return self._load_fallback_work_area_orientation()
+
+    @property
     def project_session_active(self) -> bool:
         return self._project_session_active
 
@@ -67,15 +75,24 @@ class SettingsService(QObject):
         self._settings.setValue(_KEY_PREVIEW_FALLBACK, value.value)
         self._settings.sync()
 
+    def set_preview_fallback_work_area_orientation(self, value: WorkAreaOrientation) -> None:
+        if self._project_session_active:
+            self._session_fallback_orientation = value
+            return
+        self._settings.setValue(_KEY_PREVIEW_FALLBACK_ORIENTATION, value.value)
+        self._settings.sync()
+
     def begin_project_session(
         self,
         settings: PlotSettings,
         fallback: FallbackWorkArea,
+        fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     ) -> None:
         """Apply project-owned settings without writing global QSettings."""
         settings.validate()
         self._project_session_active = True
         self._session_fallback = fallback
+        self._session_fallback_orientation = fallback_orientation
         self._current = settings
         self.settings_changed.emit(settings)
 
@@ -83,6 +100,7 @@ class SettingsService(QObject):
         """Return to global QSettings-backed plot settings and fallback."""
         self._project_session_active = False
         self._session_fallback = None
+        self._session_fallback_orientation = None
         self._current = self._load()
         self.settings_changed.emit(self._current)
 
@@ -165,6 +183,14 @@ class SettingsService(QObject):
         if raw == FallbackWorkArea.A3.value:
             return FallbackWorkArea.A3
         return FallbackWorkArea.A4
+
+    def _load_fallback_work_area_orientation(self) -> WorkAreaOrientation:
+        if not self._settings.contains(_KEY_PREVIEW_FALLBACK_ORIENTATION):
+            return WorkAreaOrientation.PORTRAIT
+        raw = self._settings.value(_KEY_PREVIEW_FALLBACK_ORIENTATION)
+        if raw == WorkAreaOrientation.LANDSCAPE.value:
+            return WorkAreaOrientation.LANDSCAPE
+        return WorkAreaOrientation.PORTRAIT
 
 
 def _read_optional_int(store: QSettings, key: str) -> int | None:

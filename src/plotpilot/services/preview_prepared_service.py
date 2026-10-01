@@ -7,15 +7,20 @@ from dataclasses import dataclass
 
 from svgelements import SVG, Group, Image, Shape, Text
 
-from plotpilot.geometry.plot_viewport import PlotViewportError, PreparedPlotSvg
+from plotpilot.geometry.plot_viewport import (
+    PlotViewportError,
+    PreparedPlotSvg,
+    emit_validated_plot_svg,
+)
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
-from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
-from plotpilot.services.preview_service import preview_svg_for_layer
-from plotpilot.services.preview_work_area import FallbackWorkArea
-from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
+from plotpilot.services.preview_work_area import (
+    FallbackWorkArea,
+    WorkAreaOrientation,
+    resolve_plot_viewport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,50 +87,63 @@ def build_prepared_layer_preview(
     plot_settings: PlotSettings,
     transform: ArtworkTransform,
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
+    fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
 ) -> PreparedLayerPreview:
     """Prepare layer geometry for preview using the plot pipeline."""
-    context_svg = preview_svg_for_layer(document, layer)
-    try:
-        physical = parse_physical_size(context_svg)
-    except PlotDimensionError as exc:
-        return PreparedLayerPreview(
-            context_svg_text=context_svg,
-            page_width_mm=0.0,
-            page_height_mm=0.0,
-            prepared=None,
-            preparation_error=exc.user_message,
-            content_counts=count_layer_content(context_svg),
-            status_lines=(exc.user_message,),
-        )
+    from plotpilot.services.layer_geometry import position_and_clip_geometry, prepare_layer_geometry
 
-    counts = count_layer_content(context_svg)
-    try:
-        prepared = prepare_layer_plot_svg(
-            context_svg,
-            plot_settings=plot_settings,
-            transform=transform,
-            fallback=fallback,
-        )
-        error_message: str | None = None
-    except PlotViewportError as exc:
-        prepared = None
-        error_message = exc.user_message
+    geometry = prepare_layer_geometry(document, layer)
+    if geometry.preparation_error is not None and not geometry.polylines:
+        if geometry.page_width_mm <= 0 or geometry.page_height_mm <= 0:
+            return PreparedLayerPreview(
+                context_svg_text=geometry.context_svg_text,
+                page_width_mm=geometry.page_width_mm,
+                page_height_mm=geometry.page_height_mm,
+                prepared=None,
+                preparation_error=geometry.preparation_error,
+                content_counts=geometry.content_counts,
+                status_lines=(geometry.preparation_error,),
+            )
 
-    status_lines = _status_lines(counts, prepared, error_message)
+    viewport = resolve_plot_viewport(
+        plot_settings,
+        fallback=fallback,
+        fallback_orientation=fallback_orientation,
+    )
+    clipped = position_and_clip_geometry(
+        geometry,
+        transform,
+        viewport_width_mm=viewport.width_mm,
+        viewport_height_mm=viewport.height_mm,
+    )
+    prepared: PreparedPlotSvg | None = None
+    error_message = clipped.error_message
+    if error_message is None:
+        try:
+            prepared = emit_validated_plot_svg(
+                list(clipped.polylines),
+                viewport_width_mm=viewport.width_mm,
+                viewport_height_mm=viewport.height_mm,
+            )
+        except PlotViewportError as exc:
+            error_message = exc.user_message
+
+    path_count = prepared.path_count if prepared is not None else None
+    status_lines = _status_lines(geometry.content_counts, path_count, error_message)
     return PreparedLayerPreview(
-        context_svg_text=context_svg,
-        page_width_mm=physical.width_mm,
-        page_height_mm=physical.height_mm,
+        context_svg_text=geometry.context_svg_text,
+        page_width_mm=geometry.page_width_mm,
+        page_height_mm=geometry.page_height_mm,
         prepared=prepared,
         preparation_error=error_message,
-        content_counts=counts,
+        content_counts=geometry.content_counts,
         status_lines=status_lines,
     )
 
 
 def _status_lines(
     counts: LayerContentCounts,
-    prepared: PreparedPlotSvg | None,
+    path_count: int | None,
     preparation_error: str | None,
 ) -> tuple[str, ...]:
     lines: list[str] = []
@@ -138,8 +156,8 @@ def _status_lines(
         lines.append("Images are not plottable")
 
     ignored = counts.non_plottable
-    if prepared is not None and counts.stroke_shapes > prepared.path_count:
-        ignored += counts.stroke_shapes - prepared.path_count
+    if path_count is not None and counts.stroke_shapes > path_count:
+        ignored += counts.stroke_shapes - path_count
 
     if ignored == 1:
         lines.append("1 element is not plottable")
@@ -165,9 +183,19 @@ def _shape_has_fill(element: Shape) -> bool:
     return value not in {"none", "transparent"}
 
 
+def preview_status_lines(
+    counts: LayerContentCounts,
+    path_count: int | None,
+    preparation_error: str | None,
+) -> tuple[str, ...]:
+    """User-facing preview warnings for one prepared layer."""
+    return _status_lines(counts, path_count, preparation_error)
+
+
 __all__ = [
     "LayerContentCounts",
     "PreparedLayerPreview",
     "build_prepared_layer_preview",
     "count_layer_content",
+    "preview_status_lines",
 ]

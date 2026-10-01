@@ -7,7 +7,7 @@ from pathlib import Path
 
 from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
-from plotpilot.services.preview_work_area import FallbackWorkArea
+from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,3 +19,4 @@ class ProjectSession:
     artwork_transform: ArtworkTransform
     plot_settings: PlotSettings
     fallback_work_area: FallbackWorkArea
+    fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT

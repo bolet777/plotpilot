@@ -38,6 +38,9 @@ specs/NNN-short-name/
 | 017 | [svg-golden-baseline](017-svg-golden-baseline/) | SVG golden oracles; known geometry bugs as xfail |
 | 022 | [vpype-evaluation](022-vpype-evaluation/) | Evaluate vpype as geometry engine (spike only; keep current engine) |
 | 023 | [axicli-controls](023-axicli-controls/) | Explicit axicli path order, pen heights, `-N`, `-C`, home, estimate |
+| 025 | [preview-performance](025-preview-performance/) | Cached flatten; async clip so position and scale stay responsive |
+| 026 | [modern-transform-controls](026-modern-transform-controls/) | Slider-based X/Y/scale panel synced with preview drag |
+| 027 | [window-resize-and-scroll](027-window-resize-and-scroll/) | Resizable window; page scrolls when the layout does not fit |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 
