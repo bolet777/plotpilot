@@ -3,6 +3,7 @@
 ## Core
 
 - [Architecture](ARCHITECTURE.md) — modules, data flows, SpecKit slice map
+- [UI V2](UI-V2.md) — V2 layout, theme hooks, V1→V2 feature checklist
 - [Project README](../README.md) — setup, run, feature summary
 - [Constitution](../.specify/memory/constitution.md) — principles and quality gates
 - [Audit 2026-09-30](AUDIT-2026-09-30.md) — technical/product audit, SVG pipeline risks, prioritized roadmap (FR)
