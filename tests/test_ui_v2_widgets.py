@@ -26,7 +26,7 @@ from plotpilot.ui.preview_widget import (
     clamp_view_zoom,
     ruler_step_mm,
 )
-from plotpilot.ui.properties_panel import TAB_DEVICE, TAB_PLOT_SETTINGS, TAB_TRANSFORM
+from plotpilot.ui.properties_panel import TAB_DEVICE
 from plotpilot.ui.theme import apply_theme, build_stylesheet, scaled_font
 from plotpilot.ui.top_bar import connection_color, connection_label
 from plotpilot.ui.widgets import ElidedLabel, FlowLayout
@@ -237,17 +237,11 @@ def _window(connected: bool = False) -> MainWindow:
     return MainWindow(plotter_backend=backend, svg_file_chooser=lambda: None)
 
 
-def test_top_bar_navigation_switches_properties_tabs(qapp) -> None:
+def test_top_bar_device_chip_switches_to_device_tab(qapp) -> None:
     window = _window()
     tabs = window._properties_tabs
-    window._top_bar.settings_requested.emit()
-    assert tabs.currentIndex() == TAB_PLOT_SETTINGS
     window._top_bar.device_requested.emit()
     assert tabs.currentIndex() == TAB_DEVICE
-    window._top_bar.preview_requested.emit()
-    assert tabs.currentIndex() == TAB_TRANSFORM
-    window._top_bar.plot_requested.emit()
-    assert tabs.currentIndex() == TAB_PLOT_SETTINGS
     window.close()
 
 

@@ -424,12 +424,7 @@ class MainWindow(QMainWindow):
 
         top = self._top_bar
         top.open_requested.connect(self._open_svg_action.trigger)
-        top.preview_requested.connect(self._on_nav_preview)
         top.layers_toggled.connect(self._on_layers_sidebar_toggled)
-        top.plot_requested.connect(self._on_nav_plot)
-        top.settings_requested.connect(
-            lambda: self._properties_panel.set_current_tab(TAB_PLOT_SETTINGS)
-        )
         top.device_requested.connect(lambda: self._properties_panel.set_current_tab(TAB_DEVICE))
 
     def _apply_launch_geometry(self) -> None:
@@ -516,15 +511,6 @@ class MainWindow(QMainWindow):
             view_menu.addAction(action)
 
     # ------------------------------------------------------------- navigation
-    def _on_nav_preview(self) -> None:
-        self._preview.fit_view()
-        self._properties_panel.set_current_tab(TAB_TRANSFORM)
-
-    def _on_nav_plot(self) -> None:
-        self._properties_panel.set_current_tab(TAB_PLOT_SETTINGS)
-        if self._plot_layer_button.isEnabled():
-            self._plot_layer_button.setFocus(Qt.FocusReason.OtherFocusReason)
-
     def _on_layers_sidebar_toggled(self, visible: bool) -> None:
         self._layers_panel.setVisible(visible)
         if self._toggle_layers_action.isChecked() != visible:

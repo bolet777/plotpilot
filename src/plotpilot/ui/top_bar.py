@@ -1,4 +1,4 @@
-"""Compact application toolbar: identity, main navigation, device chip, settings."""
+"""Compact application toolbar: identity, main navigation, and device chip."""
 
 from __future__ import annotations
 
@@ -91,10 +91,7 @@ class TopBar(QWidget):
     """
 
     open_requested = Signal()
-    preview_requested = Signal()
     layers_toggled = Signal(bool)
-    plot_requested = Signal()
-    settings_requested = Signal()
     device_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -138,21 +135,11 @@ class TopBar(QWidget):
         self.open_button.clicked.connect(self.open_requested)
         nav.addWidget(self.open_button)
 
-        self.preview_button = self._nav_button("Preview", "Fit the artwork in the workspace")
-        self.preview_button.setCheckable(False)
-        self.preview_button.clicked.connect(self.preview_requested)
-        nav.addWidget(self.preview_button)
-
         self.layers_button = self._nav_button("Layers", "Show or hide the Layers sidebar")
         self.layers_button.setCheckable(True)
         self.layers_button.setChecked(True)
         self.layers_button.toggled.connect(self.layers_toggled)
         nav.addWidget(self.layers_button)
-
-        self.plot_button = self._nav_button("Plot", "Open plot settings and actions")
-        self.plot_button.setCheckable(False)
-        self.plot_button.clicked.connect(self.plot_requested)
-        nav.addWidget(self.plot_button)
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(False)
         root.addWidget(nav_host)
@@ -190,12 +177,6 @@ class TopBar(QWidget):
         chip_text.addLayout(status_row)
         chip_layout.addLayout(chip_text)
         root.addWidget(self.device_chip)
-
-        self.settings_button = QPushButton("Settings", self)
-        self.settings_button.setProperty("role", "nav")
-        self.settings_button.setToolTip("Plot settings")
-        self.settings_button.clicked.connect(self.settings_requested)
-        root.addWidget(self.settings_button)
 
     def _nav_button(self, text: str, tooltip: str) -> QPushButton:
         button = QPushButton(text, self)
