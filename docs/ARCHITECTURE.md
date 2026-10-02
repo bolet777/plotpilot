@@ -17,7 +17,11 @@ baseline. This document describes how code is organized today.
 src/plotpilot/
   app/           `run()`, macOS Dock/menu branding (`macos.py`)
   resources/     App icons (PNG sizes + `plotpilot.icns`)
-  ui/            MainWindow, LayerPreviewWidget, PlotSettingsWidget
+  ui/            MainWindow (composition + slots) and the V2 regions:
+                 top_bar, layers_panel, preview_workspace (+ preview_widget),
+                 properties_panel (artwork_transform_controls,
+                 plot_settings_widget, device_panel), action_bar;
+                 theme.py (palette + QSS), widgets.py (FlowLayout, cards, …)
   svg/           parse.py, layers.py, preview.py, plot_dimensions.py
   geometry/      plot_viewport.py, liang_barsky.py — mm mapping, flatten, clip
   plotter/       PlotterBackend protocol, axidraw.py (axicli), fake.py
@@ -80,6 +84,29 @@ UI **Stop** → cancel plot subprocess if needed → `request_safe_stop`:
 
 `PlotterService` runs detect/pen/plot on `QThreadPool`; idle timer triggers
 passive `detect_presence`; UI binds to `status_changed` and `plot_state_changed`.
+
+## UI composition (V2)
+
+`MainWindow` owns the services and all slots; the presentation is split into
+region widgets that expose plain attributes (buttons, labels) and a few
+signals. `MainWindow._build_ui()` composes them and `_wire_ui()` connects them
+to the existing slots — no business logic lives in the region widgets.
+
+```text
+TopBar                       identity · Open/Preview/Layers/Plot · device chip · Settings
+QSplitter "mainSplitter"
+  LayersPanel                QListWidget + LayerItemDelegate (check, swatch, name, paths)
+  PreviewWorkspace           QStackedWidget: empty page | LayerPreviewWidget (+ overlays)
+  PropertiesPanel            QTabWidget: Transform | Plot Settings | Device (each scrolls)
+ActionBar                    status strip · progress · pen-change banner · button groups
+```
+
+- `theme.py` is the single place for colours and the Qt stylesheet; widgets opt
+  into styles through `objectName` and the dynamic `role` property.
+- The preview's zoom/pan/rulers are view-only: `LayerPreviewWidget` scales the
+  computed `PhysicalPreviewLayout` for painting, while `artwork_transform`,
+  margins and plotting coordinates are unchanged.
+- See [UI-V2.md](UI-V2.md) for the feature-by-feature map from V1 to V2.
 
 ## SpecKit alignment
 

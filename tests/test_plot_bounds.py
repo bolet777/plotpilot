@@ -33,12 +33,28 @@ def test_a4_portrait_exceeds_model_1_without_auto_rotate() -> None:
     assert result.would_fit_if_rotated
     assert result.document_width_mm == 210
     assert result.document_height_mm == 297
-    assert "preview orientation" in result.message
+    assert "Transform → Orientation" in result.message
 
 
 def test_a4_portrait_fits_model_1_only_with_auto_rotate() -> None:
     result = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1), auto_rotate=True)
     assert result.status is BoundsStatus.OK
+
+
+def test_a4_portrait_fits_model_1_when_plotpilot_rotates() -> None:
+    for rotation in (90, 270):
+        result = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1), rotation_degrees=rotation)
+        assert result.status is BoundsStatus.OK
+        assert "rotated: 297 × 210 mm" in result.message
+    # 180° keeps the footprint, so the page still exceeds the model.
+    flipped = check_plot_bounds(_A4_PORTRAIT, PlotSettings(model=1), rotation_degrees=180)
+    assert flipped.status is BoundsStatus.OUT_OF_BOUNDS
+
+
+def test_landscape_page_rotated_by_plotpilot_exceeds_model_1() -> None:
+    result = check_plot_bounds(_A4_LANDSCAPE, PlotSettings(model=1), rotation_degrees=90)
+    assert result.status is BoundsStatus.OUT_OF_BOUNDS
+    assert result.would_fit_if_rotated
 
 
 def test_a3_sheet_exceeds_model_2_without_auto_rotate() -> None:

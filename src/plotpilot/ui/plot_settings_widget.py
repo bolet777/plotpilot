@@ -1,4 +1,4 @@
-"""Compact plot settings controls."""
+"""Compact plot settings controls (Plot Settings tab of the properties panel)."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QGridLayout,
-    QGroupBox,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -33,6 +34,7 @@ from plotpilot.models.plot_settings import (
     PlotSettings,
 )
 from plotpilot.services.settings_service import SettingsService
+from plotpilot.ui.widgets import make_card
 
 _PEN_POS_TOOLTIP = (
     "Servo position from 0 to 100, not a height in millimeters. "
@@ -49,14 +51,13 @@ _PATH_ORDER_TOOLTIP = (
     "axidraw_conf.py. Strict file order preserves the SVG. Basic reorder "
     "speeds travel without reversing paths. Full reorder may reverse paths."
 )
-_ORIENTATION_TOOLTIP = (
-    "PlotPilot always passes axicli -N. Portrait pages stay in the same "
-    "orientation as the preview. axicli cannot force auto-rotate on from the "
-    "command line, and the rotation direction is only a config-file setting."
+_MODEL_TOOLTIP = (
+    "AxiDraw model passed to axicli (-L). It defines the physical plot area used "
+    "for the preview, clipping, and the page preflight."
 )
 
 
-class PlotSettingsWidget(QGroupBox):
+class PlotSettingsWidget(QWidget):
     """Pen speeds, heights, path order, and model; persists via SettingsService."""
 
     user_changed = Signal()
@@ -67,90 +68,113 @@ class PlotSettingsWidget(QGroupBox):
         *,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Plot Settings", parent)
+        super().__init__(parent)
         self._service = settings_service
         self._block_sync = False
 
-        grid = QGridLayout(self)
-        row = 0
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
 
+        # ---- Speed ----------------------------------------------------------
+        speed_card, speed_layout = make_card("Speed", self, subtitle="(% of maximum)")
+        speed_grid = self._grid()
         self._pen_down_slider, self._pen_down_value = self._add_slider_row(
-            grid,
-            row,
+            speed_grid,
+            0,
             "Pen-down speed",
             REFERENCE_PEN_DOWN_SPEED,
         )
-        row += 1
         self._pen_up_slider, self._pen_up_value = self._add_slider_row(
-            grid,
-            row,
+            speed_grid,
+            1,
             "Pen-up speed",
             REFERENCE_PEN_UP_SPEED,
         )
-        row += 1
         self._accel_slider, self._accel_value = self._add_slider_row(
-            grid,
-            row,
+            speed_grid,
+            2,
             "Acceleration",
             REFERENCE_ACCELERATION,
             minimum=ACCEL_MIN,
             maximum=ACCEL_MAX,
         )
-        row += 1
+        speed_layout.addLayout(speed_grid)
+        self._const_speed_checkbox = QCheckBox("Constant pen-down speed", self)
+        self._const_speed_checkbox.setToolTip(_CONST_SPEED_TOOLTIP)
+        self._const_speed_checkbox.toggled.connect(self._on_const_speed_toggled)
+        speed_layout.addWidget(self._const_speed_checkbox)
+        root.addWidget(speed_card)
+
+        # ---- Pen positions ----------------------------------------------------
+        pen_card, pen_layout = make_card("Pen height", self, subtitle="(servo position 0–100)")
+        pen_grid = self._grid()
         self._pen_pos_up_slider, self._pen_pos_up_value = self._add_slider_row(
-            grid,
-            row,
-            "Pen up position",
+            pen_grid,
+            0,
+            "Pen-up position",
             REFERENCE_PEN_UP_POSITION,
             minimum=PEN_POS_MIN,
             maximum=PEN_POS_MAX,
             tooltip=f"Raised pen. {_PEN_POS_TOOLTIP} Driver default is typically 60.",
         )
-        row += 1
         self._pen_pos_down_slider, self._pen_pos_down_value = self._add_slider_row(
-            grid,
-            row,
-            "Pen down position",
+            pen_grid,
+            1,
+            "Pen-down position",
             REFERENCE_PEN_DOWN_POSITION,
             minimum=PEN_POS_MIN,
             maximum=PEN_POS_MAX,
             tooltip=f"Lowered pen. {_PEN_POS_TOOLTIP} Driver default is typically 30.",
         )
-        row += 1
+        pen_layout.addLayout(pen_grid)
+        root.addWidget(pen_card)
 
-        grid.addWidget(QLabel("Model"), row, 0)
+        # ---- Machine ----------------------------------------------------------
+        machine_card, machine_layout = make_card("Machine", self)
+        machine_grid = QGridLayout()
+        machine_grid.setHorizontalSpacing(10)
+        machine_grid.setVerticalSpacing(8)
+        machine_grid.setColumnStretch(1, 1)
+        model_label = QLabel("Model", self)
+        model_label.setToolTip(_MODEL_TOOLTIP)
+        machine_grid.addWidget(model_label, 0, 0)
         self._model_combo = QComboBox(self)
+        self._model_combo.setToolTip(_MODEL_TOOLTIP)
+        self._model_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon,
+        )
+        self._model_combo.setMinimumContentsLength(14)
         self._model_combo.addItem("Default (CLI)", None)
         for code in sorted(AXIDRAW_MODELS):
             self._model_combo.addItem(f"{AXIDRAW_MODELS[code]} ({code})", code)
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
-        grid.addWidget(self._model_combo, row, 1, 1, 2)
-        row += 1
+        machine_grid.addWidget(self._model_combo, 0, 1)
 
-        grid.addWidget(QLabel("Path order"), row, 0)
+        order_label = QLabel("Path order", self)
+        order_label.setToolTip(_PATH_ORDER_TOOLTIP)
+        machine_grid.addWidget(order_label, 1, 0)
         self._path_order_combo = QComboBox(self)
         self._path_order_combo.setToolTip(_PATH_ORDER_TOOLTIP)
+        self._path_order_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon,
+        )
+        self._path_order_combo.setMinimumContentsLength(14)
         for value, label in PATH_ORDER_OPTIONS:
             self._path_order_combo.addItem(label, value)
         self._path_order_combo.currentIndexChanged.connect(self._on_path_order_changed)
-        grid.addWidget(self._path_order_combo, row, 1, 1, 2)
-        row += 1
+        machine_grid.addWidget(self._path_order_combo, 1, 1)
+        machine_layout.addLayout(machine_grid)
+        root.addWidget(machine_card)
 
-        self._const_speed_checkbox = QCheckBox("Constant pen-down speed", self)
-        self._const_speed_checkbox.setToolTip(_CONST_SPEED_TOOLTIP)
-        self._const_speed_checkbox.toggled.connect(self._on_const_speed_toggled)
-        grid.addWidget(self._const_speed_checkbox, row, 0, 1, 3)
-        row += 1
-
-        self._orientation_label = QLabel("Orientation: preserved (no auto-rotate)", self)
-        self._orientation_label.setToolTip(_ORIENTATION_TOOLTIP)
-        self._orientation_label.setWordWrap(True)
-        grid.addWidget(self._orientation_label, row, 0, 1, 3)
-        row += 1
-
+        # ---- Reset ------------------------------------------------------------
         self._reset_button = QPushButton("Reset to defaults", self)
+        self._reset_button.setToolTip(
+            "Clear every override so axicli uses its driver defaults (axidraw_conf.py).",
+        )
+        self._reset_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._reset_button.clicked.connect(self._on_reset)
-        grid.addWidget(self._reset_button, row, 0, 1, 3)
+        root.addWidget(self._reset_button)
 
         self._pen_down_slider.valueChanged.connect(self._on_pen_down_changed)
         self._pen_up_slider.valueChanged.connect(self._on_pen_up_changed)
@@ -160,6 +184,14 @@ class PlotSettingsWidget(QGroupBox):
 
         self._service.settings_changed.connect(self._apply_settings)
         self._apply_settings(self._service.plot_settings)
+
+    @staticmethod
+    def _grid() -> QGridLayout:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
+        return grid
 
     def _add_slider_row(
         self,
@@ -172,10 +204,11 @@ class PlotSettingsWidget(QGroupBox):
         maximum: int = SPEED_MAX,
         tooltip: str | None = None,
     ) -> tuple[QSlider, QLabel]:
-        name = QLabel(label)
+        name = QLabel(label, self)
+        name.setProperty("role", "caption")
         if tooltip:
             name.setToolTip(tooltip)
-        grid.addWidget(name, row, 0)
+        grid.addWidget(name, row * 2, 0, 1, 2)
         slider = QSlider(Qt.Orientation.Horizontal, self)
         slider.setMinimum(minimum)
         slider.setMaximum(maximum)
@@ -183,10 +216,11 @@ class PlotSettingsWidget(QGroupBox):
         if tooltip:
             slider.setToolTip(tooltip)
         value_label = QLabel(str(reference), self)
-        value_label.setMinimumWidth(28)
+        value_label.setProperty("role", "value")
+        value_label.setMinimumWidth(30)
         value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        grid.addWidget(slider, row, 1)
-        grid.addWidget(value_label, row, 2)
+        grid.addWidget(value_label, row * 2, 2)
+        grid.addWidget(slider, row * 2 + 1, 0, 1, 3)
         return slider, value_label
 
     def _apply_settings(self, settings: PlotSettings) -> None:
@@ -327,3 +361,10 @@ class PlotSettingsWidget(QGroupBox):
         self._path_order_combo.setEnabled(enabled)
         self._const_speed_checkbox.setEnabled(enabled)
         self._reset_button.setEnabled(enabled)
+
+    def current_model_name(self) -> str:
+        """Human label for the selected model (used by the top bar / device tab)."""
+        model = self._service.plot_settings.model
+        if model is None:
+            return "AxiDraw (Default CLI)"
+        return AXIDRAW_MODELS.get(model, f"AxiDraw model {model}")

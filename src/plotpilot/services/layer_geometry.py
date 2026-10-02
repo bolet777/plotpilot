@@ -107,6 +107,8 @@ def position_and_clip_geometry(
             clip_y_min_mm=area.y_mm,
             clip_x_max_mm=area.x_max_mm,
             clip_y_max_mm=area.y_max_mm,
+            page_width_mm=geometry.page_width_mm,
+            page_height_mm=geometry.page_height_mm,
         )
     except PrintMarginsError as exc:
         return ClippedLayerGeometry(polylines=(), path_count=0, error_message=exc.user_message)

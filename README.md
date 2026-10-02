@@ -34,12 +34,13 @@ SVG geometry reliability is tracked separately in
 
 - **Open SVG** — valid SVG files; clear errors for missing, non-SVG, or malformed files.
 - **Layers** — list with color swatches; select a layer to preview; checkboxes for multi-layer jobs.
-- **Preview** — vector preview of the selected layer in the main window.
+- **Preview** — vector preview of the selected layer with paper, margins and printable area; view-only zoom, pan and mm rulers.
 - **Plotter** — connection status, **Pen ↑** / **Pen ↓**, **Refresh**; automatic presence polling when idle.
 - **Plot selected layer** — plots the current layer through `axicli` using current plot settings.
 - **Plot checked layers** — queues checked layers; pauses between layers for pen changes (**Continue**).
 - **Stop** — cancels plotting and runs the safe-stop sequence on the device.
 - **Plot settings** — editable motion/pen parameters; stored with Qt `QSettings`.
+- **Dark UI (V2)** — top bar, layers sidebar, centre preview, tabbed properties (Transform / Plot Settings / Device), bottom action bar; see [docs/UI-V2.md](docs/UI-V2.md).
 
 Hardware is optional for development: logic and UI are covered by pytest with fake backends.
 
@@ -94,7 +95,7 @@ uv run ruff format src tests
 src/plotpilot/
   app/         Entry point, macOS branding helpers
   resources/   Bundled icons (PNG + ICNS)
-  ui/          Main window, preview, plot settings widgets
+  ui/          Main window shell (top bar, layers, preview, properties, action bar), theme
   svg/         Parse SVG, layers, preview SVG generation
   geometry/    Viewport transform, flattening, and clipping before plot
   plotter/     PlotterBackend, AxiDraw CLI adapter, fake backend for tests

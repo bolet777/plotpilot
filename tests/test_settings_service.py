@@ -5,11 +5,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plot_settings import REORDERING_BASIC, REORDERING_STRICT, PlotSettings
-from plotpilot.services.settings_service import SettingsService
+from plotpilot.services.settings_service import SettingsService, open_settings_store
 
 
 @pytest.fixture(scope="session")
@@ -26,7 +25,7 @@ def isolated_settings(qapp):
     app = f"PlotPilotTest-{uuid.uuid4().hex}"
     service = SettingsService(organization=org, application=app)
     yield service
-    QSettings(org, app).clear()
+    open_settings_store(org, app).clear()
 
 
 def test_persist_and_reload(isolated_settings: SettingsService) -> None:
@@ -59,7 +58,7 @@ def test_reset_clears_overrides_and_storage(isolated_settings: SettingsService) 
     isolated_settings.replace(PlotSettings(pen_down_speed=20, model=4))
     isolated_settings.reset_plot_settings()
     assert isolated_settings.plot_settings == PlotSettings()
-    store = QSettings(
+    store = open_settings_store(
         isolated_settings._organization,  # noqa: SLF001
         isolated_settings._application,  # noqa: SLF001
     )
@@ -79,7 +78,7 @@ def test_path_reordering_persists(isolated_settings: SettingsService) -> None:
 def test_reset_clears_path_reordering(isolated_settings: SettingsService) -> None:
     isolated_settings.replace(PlotSettings(path_reordering=REORDERING_BASIC))
     isolated_settings.reset_plot_settings()
-    store = QSettings(
+    store = open_settings_store(
         isolated_settings._organization,  # noqa: SLF001
         isolated_settings._application,  # noqa: SLF001
     )

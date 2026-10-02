@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.artwork_transform import ArtworkTransform
@@ -32,7 +31,7 @@ from plotpilot.services.plot_service import plot_svg_for_layer
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.positioned_plot_service import prepare_layer_plot_svg
 from plotpilot.services.project_file_service import FORMAT_ID, read_project_file, write_project_file
-from plotpilot.services.settings_service import SettingsService
+from plotpilot.services.settings_service import SettingsService, open_settings_store
 from plotpilot.services.svg_loader import load_svg_from_path
 from qt_helpers import wait_for_plot_started, wait_until
 
@@ -191,7 +190,7 @@ def test_new_settings_persist(qapp) -> None:
     assert reloaded.plot_settings.pen_pos_down == 18
     assert reloaded.plot_settings.const_speed is True
     assert reloaded.plot_settings.path_reordering == REORDERING_FULL
-    QSettings(org, app).clear()
+    open_settings_store(org, app).clear()
 
 
 def test_driver_default_path_order_persists(qapp) -> None:
@@ -199,11 +198,11 @@ def test_driver_default_path_order_persists(qapp) -> None:
     app = f"PlotPilotTest-{uuid.uuid4().hex}"
     service = SettingsService(organization=org, application=app)
     service.replace(PlotSettings(path_reordering=None))
-    store = QSettings(org, app)
+    store = open_settings_store(org, app)
     assert store.value("plot/path_reordering") == "driver"
     reloaded = SettingsService(organization=org, application=app)
     assert reloaded.plot_settings.path_reordering is None
-    QSettings(org, app).clear()
+    open_settings_store(org, app).clear()
 
 
 def test_missing_qsettings_path_order_is_strict(qapp) -> None:
@@ -213,7 +212,7 @@ def test_missing_qsettings_path_order_is_strict(qapp) -> None:
     assert loaded.plot_settings.path_reordering == REORDERING_STRICT
     assert loaded.plot_settings.const_speed is False
     assert loaded.plot_settings.pen_pos_up is None
-    QSettings(org, app).clear()
+    open_settings_store(org, app).clear()
 
 
 def test_legacy_project_omits_new_keys(tmp_path: Path) -> None:

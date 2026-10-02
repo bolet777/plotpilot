@@ -12,7 +12,7 @@ from plotpilot.models.artwork_transform import ArtworkTransform
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.services.preview_work_area import FallbackWorkArea
 from plotpilot.services.project_file_service import read_project_file, write_project_file
-from plotpilot.services.settings_service import SettingsService
+from plotpilot.services.settings_service import SettingsService, open_settings_store
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
 
@@ -23,9 +23,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 def isolated_settings(qapp) -> SettingsService:
     service = SettingsService(organization="PlotPilotTestProject", application="MainWindowProject")
     yield service
-    from PySide6.QtCore import QSettings
 
-    QSettings("PlotPilotTestProject", "MainWindowProject").clear()
+    open_settings_store("PlotPilotTestProject", "MainWindowProject").clear()
 
 
 @pytest.fixture

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
 
 from plotpilot.geometry.plot_viewport import PlotViewportError
 from plotpilot.models.artwork_transform import ArtworkTransform
@@ -26,7 +25,7 @@ from plotpilot.services.preview_work_area import (
     resolve_preview_work_area,
 )
 from plotpilot.services.project_file_service import FORMAT_ID, read_project_file, write_project_file
-from plotpilot.services.settings_service import SettingsService
+from plotpilot.services.settings_service import SettingsService, open_settings_store
 from plotpilot.ui.main_window import MainWindow
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -173,7 +172,7 @@ def test_orientation_persists_in_qsettings(qapp) -> None:
     service.set_preview_fallback_work_area_orientation(WorkAreaOrientation.LANDSCAPE)
     reloaded = SettingsService(organization=org, application=app)
     assert reloaded.preview_fallback_work_area_orientation is WorkAreaOrientation.LANDSCAPE
-    QSettings(org, app).clear()
+    open_settings_store(org, app).clear()
 
 
 def test_project_round_trip_orientation(tmp_path: Path) -> None:
@@ -217,7 +216,7 @@ def orientation_window(qapp, fake_plotter_backend, monkeypatch) -> MainWindow:
     from PySide6.QtWidgets import QMessageBox
 
     org, app_name = "PlotPilotTestOrientation", "MainWindow"
-    QSettings(org, app_name).clear()
+    open_settings_store(org, app_name).clear()
 
     monkeypatch.setattr(
         QMessageBox,
@@ -238,7 +237,7 @@ def orientation_window(qapp, fake_plotter_backend, monkeypatch) -> MainWindow:
     yield window
     window.close()
     qapp.processEvents()
-    QSettings("PlotPilotTestOrientation", "MainWindow").clear()
+    open_settings_store("PlotPilotTestOrientation", "MainWindow").clear()
 
 
 def test_orientation_change_marks_project_dirty(
