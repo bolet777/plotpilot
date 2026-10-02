@@ -11,6 +11,11 @@ display, attached AxiDraw, or `axicli` on `PATH`.
   needed; they validate wiring, not visual pixels.
 - **Hardware / axicli** — not part of CI; optional manual checks on a machine
   with AxiDraw software installed.
+- **Settings isolation** — an autouse fixture in `conftest.py` redirects
+  `QSettings` to INI files under `tmp_path`, so tests never touch the real
+  `com.plotpilot.PlotPilot` preferences. Open stores with
+  `plotpilot.services.settings_service.open_settings_store(org, app)`, not
+  `QSettings(org, app)` (that constructor ignores the redirect on PySide6).
 
 ## Coverage map (by area)
 

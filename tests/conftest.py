@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QThreadPool
+from PySide6.QtCore import QSettings, QThreadPool
 from PySide6.QtWidgets import QApplication
 
 from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
@@ -135,6 +135,24 @@ def _legacy_drawings_use_full_bleed_margins(
 
     monkeypatch.setattr("plotpilot.models.print_margins.active_print_margins", _resolve)
     monkeypatch.setattr(SettingsService, "print_margins", property(lambda self: full_bleed))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_qsettings(tmp_path: Path) -> None:
+    """Keep every ``QSettings`` write inside the test's temp dir.
+
+    ``SettingsService`` (and tests, via ``open_settings_store``) open stores
+    with ``QSettings.defaultFormat()``. The macOS native format goes through
+    CFPreferences and ignores ``setPath``, so tests switch to INI files under
+    ``tmp_path``. Without this, ``MainWindow`` tests that call
+    ``settings_service.replace(...)`` overwrite the developer's real
+    ``com.plotpilot.PlotPilot`` preferences.
+    """
+    store = tmp_path / "qsettings"
+    store.mkdir()
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(store))
+    yield
 
 
 @pytest.fixture(autouse=True)

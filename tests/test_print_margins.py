@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -43,7 +42,7 @@ from plotpilot.services.project_file_service import (
     read_project_file,
     write_project_file,
 )
-from plotpilot.services.settings_service import SettingsService
+from plotpilot.services.settings_service import SettingsService, open_settings_store
 from plotpilot.services.svg_loader import load_svg_from_path
 from plotpilot.ui.main_window import MainWindow
 from plotpilot.ui.preview_widget import LayerPreviewWidget
@@ -381,7 +380,7 @@ def test_preview_shows_inner_boundary_and_clipped_strokes(qapp: QApplication) ->
 def margin_window(qapp: QApplication) -> MainWindow:
     org = f"PlotPilotMargins-{uuid.uuid4().hex}"
     app_name = "Margins"
-    QSettings(org, app_name).clear()
+    open_settings_store(org, app_name).clear()
     window = MainWindow(
         plotter_backend=FakePlotterBackend(),
         settings_service=SettingsService(organization=org, application=app_name),
@@ -392,7 +391,7 @@ def margin_window(qapp: QApplication) -> MainWindow:
     yield window
     window.close()
     qapp.processEvents()
-    QSettings(org, app_name).clear()
+    open_settings_store(org, app_name).clear()
 
 
 def test_margin_controls_default_and_accept_zero(margin_window: MainWindow) -> None:
@@ -414,12 +413,12 @@ def test_qsettings_round_trip_and_invalid_recovery(qapp: QApplication) -> None:
     reloaded = SettingsService(organization=org, application=app_name)
     assert reloaded.print_margins == PrintMargins(horizontal_mm=4.5, vertical_mm=6.0)
 
-    store = QSettings(org, app_name)
+    store = open_settings_store(org, app_name)
     store.setValue("print/margin_horizontal_mm", -3)
     store.sync()
     recovered = SettingsService(organization=org, application=app_name)
     assert recovered.print_margins == PrintMargins()
-    QSettings(org, app_name).clear()
+    open_settings_store(org, app_name).clear()
 
 
 def test_project_session_does_not_overwrite_global_defaults(qapp: QApplication) -> None:
@@ -436,7 +435,7 @@ def test_project_session_does_not_overwrite_global_defaults(qapp: QApplication) 
     assert service.print_margins == PrintMargins(1.0, 2.0)
     service.end_project_session()
     assert service.print_margins == PrintMargins(3.0, 4.0)
-    QSettings(org, app_name).clear()
+    open_settings_store(org, app_name).clear()
 
 
 def test_project_round_trip_and_legacy_default(tmp_path: Path) -> None:

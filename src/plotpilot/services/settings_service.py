@@ -30,6 +30,22 @@ _KEY_CONST_SPEED = "plot/const_speed"
 _PATH_ORDER_DRIVER = "driver"
 
 
+def open_settings_store(organization: str, application: str) -> QSettings:
+    """Open the user-scope store for *organization*/*application*.
+
+    Uses ``QSettings.defaultFormat()`` explicitly: on PySide6 the two-argument
+    constructor ignores ``setDefaultFormat`` and always picks the native
+    backend, which tests cannot redirect. In production the default format is
+    native, so the file is the same as ``QSettings(organization, application)``.
+    """
+    return QSettings(
+        QSettings.defaultFormat(),
+        QSettings.Scope.UserScope,
+        organization,
+        application,
+    )
+
+
 class SettingsService(QObject):
     """Loads and saves PlotSettings; emits when values change."""
 
@@ -45,7 +61,7 @@ class SettingsService(QObject):
         super().__init__(parent)
         self._organization = organization
         self._application = application
-        self._settings = QSettings(organization, application)
+        self._settings = open_settings_store(organization, application)
         self._current = self._load()
         self._project_session_active = False
         self._session_fallback: FallbackWorkArea | None = None
