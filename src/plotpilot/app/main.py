@@ -22,6 +22,7 @@ def _run_qt_app() -> None:
 
     from plotpilot.resources.app_icon import application_icon
     from plotpilot.ui.main_window import MainWindow
+    from plotpilot.ui.theme import apply_theme
 
     QCoreApplication.setApplicationName(_APP_NAME)
     QCoreApplication.setOrganizationName(_APP_NAME)
@@ -29,6 +30,7 @@ def _run_qt_app() -> None:
 
     app = QApplication(sys.argv)
     app.setWindowIcon(application_icon())
+    apply_theme(app)
 
     window = MainWindow()
     window.show()

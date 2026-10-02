@@ -1,38 +1,32 @@
-"""Primary application window."""
+"""Primary application window (V2 layout).
+
+Composition::
+
+    TopBar
+    QSplitter: LayersPanel | PreviewWorkspace | PropertiesPanel(Transform, Plot Settings, Device)
+    ActionBar
+
+The window keeps every service, slot, and attribute name from V1 so that the
+plotting/estimation/project logic and the existing tests are untouched; only
+the arrangement of widgets changed.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer
-from PySide6.QtGui import (
-    QAction,
-    QColor,
-    QGuiApplication,
-    QIcon,
-    QKeySequence,
-    QPainter,
-    QPixmap,
-    QWheelEvent,
-)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractScrollArea,
-    QApplication,
     QComboBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QStackedWidget,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -42,7 +36,7 @@ from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJ
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
 from plotpilot.models.plot_progress import PlotProgress
-from plotpilot.models.plotter_status import PlotterConnectionState, PlotterStatus
+from plotpilot.models.plotter_status import PlotterStatus
 from plotpilot.models.print_margins import (
     PrintMargins,
     PrintMarginsError,
@@ -80,7 +74,10 @@ from plotpilot.services.project_file_service import (
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.ui.action_bar import ActionBar
 from plotpilot.ui.artwork_transform_controls import ArtworkTransformControls
+from plotpilot.ui.device_panel import DevicePanel
+from plotpilot.ui.layers_panel import LayersPanel, populate_layer_item
 from plotpilot.ui.plot_progress_labels import (
     progress_fraction_label,
     progress_headline,
@@ -88,13 +85,25 @@ from plotpilot.ui.plot_progress_labels import (
     progress_timing_line,
 )
 from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
-from plotpilot.ui.preview_widget import LayerPreviewWidget
+from plotpilot.ui.preview_workspace import PreviewWorkspace
+from plotpilot.ui.properties_panel import (
+    TAB_DEVICE,
+    TAB_PLOT_SETTINGS,
+    TAB_TRANSFORM,
+    PropertiesPanel,
+)
+from plotpilot.ui.theme import set_role
+from plotpilot.ui.top_bar import TopBar
 from plotpilot.ui.transform_slider_mapping import ArtworkBoundsMm, artwork_bounds_from_polylines
+from plotpilot.ui.widgets import make_wrapping_label
 
-_PREFERRED_WINDOW_WIDTH = 900
-_PREFERRED_WINDOW_HEIGHT = 560
-_MINIMUM_WINDOW_WIDTH = 480
-_MINIMUM_WINDOW_HEIGHT = 320
+_PREFERRED_WINDOW_WIDTH = 1240
+_PREFERRED_WINDOW_HEIGHT = 800
+_MINIMUM_WINDOW_WIDTH = 760
+_MINIMUM_WINDOW_HEIGHT = 520
+
+_LAYERS_PANEL_DEFAULT_WIDTH = 220
+_PROPERTIES_PANEL_DEFAULT_WIDTH = 356
 
 
 def window_size_bounds(
@@ -104,7 +113,9 @@ def window_size_bounds(
     """Return ``(minimum, initial)`` sizes clamped to the usable screen.
 
     ``available_*`` should already exclude the menu bar and Dock. The initial
-    size stays 900×560 when that fits, and never exceeds the usable screen.
+    size stays at the preferred size when that fits, and never exceeds the
+    usable screen. The minimum also shrinks on tiny displays so the window is
+    always fully visible.
     """
     min_w = _MINIMUM_WINDOW_WIDTH
     min_h = _MINIMUM_WINDOW_HEIGHT
@@ -119,40 +130,30 @@ def window_size_bounds(
     return (min_w, min_h), (max(width, min_w), max(height, min_h))
 
 
-class _MainContentScrollArea(QScrollArea):
-    """Page scroller whose minimum size does not follow the document size."""
+def splitter_sizes_for_width(
+    total_width: int,
+    *,
+    layers_visible: bool = True,
+    layers_width: int = _LAYERS_PANEL_DEFAULT_WIDTH,
+    properties_width: int = _PROPERTIES_PANEL_DEFAULT_WIDTH,
+) -> list[int]:
+    """Initial ``[layers, preview, properties]`` widths; the preview takes the remainder.
 
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt API
-        return QSize(0, 0)
-
-
-class _LayerListWheelFilter(QObject):
-    """Forward wheel events to the page when the layer list cannot scroll."""
-
-    def __init__(self, scroll: QScrollArea) -> None:
-        super().__init__(scroll)
-        self._scroll = scroll
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802 — Qt API
-        if not isinstance(watched, QListWidget) or not isinstance(event, QWheelEvent):
-            return False
-        delta = event.angleDelta()
-        pixels = event.pixelDelta()
-        wants_vertical = delta.y() != 0 or pixels.y() != 0
-        wants_horizontal = delta.x() != 0 or pixels.x() != 0
-        if not wants_vertical and not wants_horizontal:
-            return False
-        vertical = watched.verticalScrollBar()
-        horizontal = watched.horizontalScrollBar()
-        list_scrolls_vertically = vertical.maximum() > vertical.minimum() and wants_vertical
-        list_scrolls_horizontally = horizontal.maximum() > horizontal.minimum() and wants_horizontal
-        if list_scrolls_vertically or list_scrolls_horizontally:
-            return False
-        viewport = self._scroll.viewport()
-        if viewport is None:
-            return False
-        QApplication.sendEvent(viewport, event)
-        return True
+    On narrow windows the side panels shrink proportionally so the preview keeps
+    at least a third of the width.
+    """
+    total = max(total_width, 0)
+    layers = layers_width if layers_visible else 0
+    properties = properties_width
+    preview_floor = int(total * 0.38)
+    overflow = layers + properties + preview_floor - total
+    if overflow > 0:
+        side = layers + properties
+        if side > 0:
+            layers = max(0, layers - overflow * layers // side)
+            properties = max(0, properties - (overflow - (layers_width - layers)))
+    preview = max(0, total - layers - properties)
+    return [layers, preview, properties]
 
 
 def choose_svg_file(parent: QWidget) -> str | None:
@@ -244,250 +245,10 @@ class MainWindow(QMainWindow):
         self._preview_compute = PreviewComputeService(parent=self)
         self._preview_compute.finished.connect(self._on_preview_compute_finished)
 
-        content = QWidget()
-        content.setObjectName("mainContent")
-        root_layout = QVBoxLayout(content)
-
-        content_row = QHBoxLayout()
-        left_column = QVBoxLayout()
-        layers_heading = QLabel("Layers", content)
-        layers_heading.setStyleSheet("font-weight: bold;")
-        left_column.addWidget(layers_heading)
-
-        self._layers_list = QListWidget(content)
-        self._layers_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self._layers_list.setMinimumWidth(220)
-        self._layers_list.currentRowChanged.connect(self._on_layer_row_changed)
-        self._layers_list.itemChanged.connect(self._on_layer_item_changed)
-        left_column.addWidget(self._layers_list, stretch=1)
-
-        content_row.addLayout(left_column, stretch=0)
-
-        preview_column = QVBoxLayout()
-        preview_column.setSpacing(6)
-
-        self._open_svg_persistent_button = QPushButton("Open SVG…", content)
-        self._open_svg_persistent_button.setVisible(False)
-        preview_column.addWidget(
-            self._open_svg_persistent_button,
-            alignment=Qt.AlignmentFlag.AlignLeft,
-        )
-
-        self._fallback_work_area_row = QWidget(content)
-        fallback_row = QHBoxLayout(self._fallback_work_area_row)
-        fallback_row.setContentsMargins(0, 0, 0, 0)
-        fallback_row.addWidget(QLabel("Work area:", self._fallback_work_area_row))
-        self._fallback_work_area_combo = QComboBox(self._fallback_work_area_row)
-        for area in (FallbackWorkArea.A4, FallbackWorkArea.A3):
-            self._fallback_work_area_combo.addItem(area.value, area)
-        stored_fallback = self._settings_service.preview_fallback_work_area
-        fallback_index = self._fallback_work_area_combo.findData(stored_fallback)
-        if fallback_index >= 0:
-            self._fallback_work_area_combo.setCurrentIndex(fallback_index)
-        self._fallback_work_area_combo.currentIndexChanged.connect(
-            self._on_fallback_work_area_changed,
-        )
-        fallback_row.addWidget(self._fallback_work_area_combo)
-        self._fallback_work_area_orientation_combo = QComboBox(self._fallback_work_area_row)
-        for orientation in (WorkAreaOrientation.PORTRAIT, WorkAreaOrientation.LANDSCAPE):
-            self._fallback_work_area_orientation_combo.addItem(orientation.value, orientation)
-        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
-        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
-        if orientation_index >= 0:
-            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
-        self._fallback_work_area_orientation_combo.currentIndexChanged.connect(
-            self._on_fallback_work_area_orientation_changed,
-        )
-        fallback_row.addWidget(self._fallback_work_area_orientation_combo)
-        fallback_row.addStretch(1)
-        preview_column.addWidget(self._fallback_work_area_row)
-
-        self._artwork_controls = ArtworkTransformControls(content)
-        self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
-        self._artwork_controls.margins_changed.connect(self._on_print_margins_changed)
-        preview_column.addWidget(self._artwork_controls)
-
-        self._preview_stack = QStackedWidget(content)
-        self._preview_empty_page = QWidget(content)
-        empty_layout = QVBoxLayout(self._preview_empty_page)
-        empty_layout.addStretch(1)
-        empty_heading = QLabel("No SVG loaded", self._preview_empty_page)
-        empty_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_heading.setStyleSheet("font-size: 14px; color: #444444;")
-        empty_layout.addWidget(empty_heading)
-        empty_layout.addSpacing(12)
-        self._open_svg_empty_button = QPushButton("Open SVG…", self._preview_empty_page)
-        empty_layout.addWidget(
-            self._open_svg_empty_button,
-            alignment=Qt.AlignmentFlag.AlignCenter,
-        )
-        open_shortcut = QKeySequence(QKeySequence.StandardKey.Open).toString(
-            QKeySequence.SequenceFormat.NativeText,
-        )
-        empty_shortcut_hint = QLabel(
-            f"or press {open_shortcut}",
-            self._preview_empty_page,
-        )
-        empty_shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_shortcut_hint.setStyleSheet("color: #666666;")
-        empty_layout.addWidget(empty_shortcut_hint)
-        empty_layout.addStretch(1)
-
-        self._preview = LayerPreviewWidget(content)
-        self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
-        self._preview_prep_timer = QTimer(self)
-        self._preview_prep_timer.setSingleShot(True)
-        self._preview_prep_timer.setInterval(50)
-        self._preview_prep_timer.timeout.connect(self._refresh_prepared_preview)
-        self._preview_stack.addWidget(self._preview_empty_page)
-        self._preview_stack.addWidget(self._preview)
-        self._sync_artwork_controls_from_preview()
-        self._refresh_artwork_transform_panel()
-        preview_column.addWidget(self._preview_stack, stretch=1)
-
-        preview_column_host = QWidget(content)
-        preview_column_host.setLayout(preview_column)
-        content_row.addWidget(preview_column_host, stretch=1)
-
-        root_layout.addLayout(content_row, stretch=1)
-
-        plotter_heading = QLabel("Plotter", content)
-        plotter_heading.setStyleSheet("font-weight: bold;")
-        root_layout.addWidget(plotter_heading)
-
-        plotter_row = QHBoxLayout()
-        self._plotter_name_label = QLabel("AxiDraw", content)
-        plotter_row.addWidget(self._plotter_name_label)
-
-        self._plotter_status_label = QLabel("○ Not connected", content)
-        self._plotter_status_label.setWordWrap(True)
-        plotter_row.addWidget(self._plotter_status_label, stretch=1)
-        root_layout.addLayout(plotter_row)
-
-        plotter_buttons = QHBoxLayout()
-        self._pen_up_button = QPushButton("Pen ↑", content)
-        self._pen_up_button.clicked.connect(self._plotter_service.pen_up)
-        plotter_buttons.addWidget(self._pen_up_button)
-
-        self._pen_down_button = QPushButton("Pen ↓", content)
-        self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
-        plotter_buttons.addWidget(self._pen_down_button)
-
-        self._home_button = QPushButton("Home", content)
-        self._home_button.setToolTip(
-            "Return to the position where the motors were enabled (walk_home). "
-            "Does not lower the pen.",
-        )
-        self._home_button.clicked.connect(self._on_home)
-        plotter_buttons.addWidget(self._home_button)
-
-        self._motors_off_button = QPushButton("Motors Off", content)
-        self._motors_off_button.setToolTip(
-            "Disable the XY motors (disable_xy). Does not move the carriage or lower the pen.",
-        )
-        self._motors_off_button.clicked.connect(self._on_motors_off)
-        plotter_buttons.addWidget(self._motors_off_button)
-
-        self._plotter_refresh_button = QPushButton("Refresh", content)
-        self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
-        plotter_buttons.addWidget(self._plotter_refresh_button)
-
-        self._plot_layer_button = QPushButton("Plot Selected Layer", content)
-        self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
-        plotter_buttons.addWidget(self._plot_layer_button)
-
-        self._plot_checked_button = QPushButton("Plot Checked Layers", content)
-        self._plot_checked_button.clicked.connect(self._on_plot_checked_layers)
-        plotter_buttons.addWidget(self._plot_checked_button)
-
-        self._plot_stop_button = QPushButton("Stop", content)
-        self._plot_stop_button.clicked.connect(self._on_stop_plot)
-        self._plot_stop_button.setEnabled(False)
-        plotter_buttons.addWidget(self._plot_stop_button)
-
-        self._multi_continue_button = QPushButton("Continue", content)
-        self._multi_continue_button.clicked.connect(self._on_multi_continue)
-        self._multi_continue_button.setVisible(False)
-        plotter_buttons.addWidget(self._multi_continue_button)
-
-        self._estimate_button = QPushButton("Estimate", content)
-        self._estimate_button.setToolTip(
-            "Estimate drawing time from the final clipped SVG (axicli -v -T). "
-            "Pen-change pauses are not included.",
-        )
-        self._estimate_button.clicked.connect(self._on_estimate_plot)
-        plotter_buttons.addWidget(self._estimate_button)
-
-        plotter_buttons.addStretch(1)
-        root_layout.addLayout(plotter_buttons)
-
-        self._estimate_label = QLabel("", content)
-        self._estimate_label.setWordWrap(True)
-        root_layout.addWidget(self._estimate_label)
-
-        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=content)
-        self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
-        root_layout.addWidget(self._plot_settings)
-
-        self._bounds_status_label = QLabel("", content)
-        self._bounds_status_label.setWordWrap(True)
-        root_layout.addWidget(self._bounds_status_label)
-
-        self._plot_progress_headline = QLabel("", content)
-        self._plot_progress_headline.setWordWrap(True)
-        self._plot_progress_headline.setVisible(False)
-        root_layout.addWidget(self._plot_progress_headline)
-
-        self._plot_progress_bar = QProgressBar(content)
-        self._plot_progress_bar.setVisible(False)
-        self._plot_progress_bar.setTextVisible(True)
-        self._plot_progress_bar.setRange(0, 100)
-        root_layout.addWidget(self._plot_progress_bar)
-
-        self._plot_progress_timing = QLabel("", content)
-        self._plot_progress_timing.setVisible(False)
-        root_layout.addWidget(self._plot_progress_timing)
-
-        self._plot_progress_next = QLabel("", content)
-        self._plot_progress_next.setVisible(False)
-        root_layout.addWidget(self._plot_progress_next)
-
-        self._plot_activity_label = QLabel("", content)
-        self._plot_activity_label.setWordWrap(True)
-        root_layout.addWidget(self._plot_activity_label)
-
-        self._pen_change_label = QLabel("", content)
-        self._pen_change_label.setWordWrap(True)
-        self._pen_change_label.setVisible(False)
-        root_layout.addWidget(self._pen_change_label)
-
-        self._plotter_message_label = QLabel("", content)
-        self._plotter_message_label.setWordWrap(True)
-        root_layout.addWidget(self._plotter_message_label)
-
-        self._status_label = QLabel("", content)
-        self._status_label.setWordWrap(True)
-        root_layout.addWidget(self._status_label)
-
-        scroll = _MainContentScrollArea(self)
-        scroll.setObjectName("mainContentScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(content)
-        self._content_scroll = scroll
-        self._layer_list_wheel_filter = _LayerListWheelFilter(scroll)
-        self._layers_list.installEventFilter(self._layer_list_wheel_filter)
-        self.setCentralWidget(scroll)
+        self._build_ui()
         self._build_menu()
-        self._open_svg_empty_button.clicked.connect(self._open_svg_action.trigger)
-        self._open_svg_persistent_button.clicked.connect(self._open_svg_action.trigger)
-        self._open_svg_action.enabledChanged.connect(self._open_svg_empty_button.setEnabled)
-        self._open_svg_action.enabledChanged.connect(self._open_svg_persistent_button.setEnabled)
+        self._wire_ui()
+
         self._sync_preview_empty_state()
         self._apply_plotter_status(self._plotter_service.status)
         self._apply_plot_state(self._plotter_service.plot_state)
@@ -502,6 +263,175 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self._apply_launch_geometry()
 
+    # ------------------------------------------------------------------ build
+    def _build_ui(self) -> None:
+        content = QWidget(self)
+        content.setObjectName("mainContent")
+        root_layout = QVBoxLayout(content)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self._top_bar = TopBar(content)
+        root_layout.addWidget(self._top_bar)
+
+        # ---- Left: layers ------------------------------------------------------
+        self._layers_panel = LayersPanel(content)
+        self._layers_list = self._layers_panel.list_widget
+        self._layers_list.currentRowChanged.connect(self._on_layer_row_changed)
+        self._layers_list.itemChanged.connect(self._on_layer_item_changed)
+        self._open_svg_persistent_button = self._layers_panel.open_button
+        self._open_svg_persistent_button.setVisible(False)
+
+        # ---- Center: workspace -------------------------------------------------
+        self._workspace = PreviewWorkspace(content)
+        self._preview_stack = self._workspace.stack
+        self._preview_empty_page = self._workspace.empty_page
+        self._open_svg_empty_button = self._workspace.open_button
+        self._preview = self._workspace.preview
+        self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
+        self._preview_prep_timer = QTimer(self)
+        self._preview_prep_timer.setSingleShot(True)
+        self._preview_prep_timer.setInterval(50)
+        self._preview_prep_timer.timeout.connect(self._refresh_prepared_preview)
+
+        # ---- Right: properties -------------------------------------------------
+        self._artwork_controls = ArtworkTransformControls(content)
+        self._artwork_controls.transform_changed.connect(self._on_artwork_controls_changed)
+        self._artwork_controls.margins_changed.connect(self._on_print_margins_changed)
+
+        self._fallback_work_area_row = QWidget(content)
+        fallback_row = QHBoxLayout(self._fallback_work_area_row)
+        fallback_row.setContentsMargins(0, 0, 0, 0)
+        fallback_row.setSpacing(6)
+        fallback_caption = QLabel("Work area", self._fallback_work_area_row)
+        fallback_caption.setProperty("role", "caption")
+        fallback_caption.setToolTip(
+            "Default (CLI) model has no known travel limits. Pick the page size and "
+            "orientation used for the preview and clipping.",
+        )
+        fallback_row.addWidget(fallback_caption)
+        self._fallback_work_area_combo = QComboBox(self._fallback_work_area_row)
+        for area in (FallbackWorkArea.A4, FallbackWorkArea.A3):
+            self._fallback_work_area_combo.addItem(area.value, area)
+        stored_fallback = self._settings_service.preview_fallback_work_area
+        fallback_index = self._fallback_work_area_combo.findData(stored_fallback)
+        if fallback_index >= 0:
+            self._fallback_work_area_combo.setCurrentIndex(fallback_index)
+        self._fallback_work_area_combo.currentIndexChanged.connect(
+            self._on_fallback_work_area_changed,
+        )
+        fallback_row.addWidget(self._fallback_work_area_combo, stretch=1)
+        self._fallback_work_area_orientation_combo = QComboBox(self._fallback_work_area_row)
+        for orientation in (WorkAreaOrientation.PORTRAIT, WorkAreaOrientation.LANDSCAPE):
+            self._fallback_work_area_orientation_combo.addItem(orientation.value, orientation)
+        stored_orientation = self._settings_service.preview_fallback_work_area_orientation
+        orientation_index = self._fallback_work_area_orientation_combo.findData(stored_orientation)
+        if orientation_index >= 0:
+            self._fallback_work_area_orientation_combo.setCurrentIndex(orientation_index)
+        self._fallback_work_area_orientation_combo.currentIndexChanged.connect(
+            self._on_fallback_work_area_orientation_changed,
+        )
+        fallback_row.addWidget(self._fallback_work_area_orientation_combo, stretch=1)
+        self._artwork_controls.work_area_slot.addWidget(self._fallback_work_area_row)
+
+        self._bounds_status_label = make_wrapping_label("", content, role="caption")
+        self._bounds_status_label.setVisible(False)
+        self._artwork_controls.work_area_slot.addWidget(self._bounds_status_label)
+
+        self._plot_settings = PlotSettingsWidget(self._settings_service, parent=content)
+        self._plot_settings.user_changed.connect(self._on_plot_settings_changed)
+
+        self._device_panel = DevicePanel(content)
+
+        self._properties_panel = PropertiesPanel(
+            transform=self._artwork_controls,
+            plot_settings=self._plot_settings,
+            device=self._device_panel,
+            parent=content,
+        )
+        self._properties_tabs = self._properties_panel.tabs
+
+        # ---- Splitter ------------------------------------------------------------
+        self._splitter = QSplitter(Qt.Orientation.Horizontal, content)
+        self._splitter.setObjectName("mainSplitter")
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(1)
+        self._splitter.addWidget(self._layers_panel)
+        self._splitter.addWidget(self._workspace)
+        self._splitter.addWidget(self._properties_panel)
+        # Proportional stretch so shrinking the window never starves the preview.
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 6)
+        self._splitter.setStretchFactor(2, 3)
+        self._splitter.setCollapsible(0, True)
+        root_layout.addWidget(self._splitter, stretch=1)
+
+        # ---- Bottom: actions -------------------------------------------------------
+        self._action_bar = ActionBar(content)
+        root_layout.addWidget(self._action_bar)
+        bar = self._action_bar
+        self._plotter_status_label = bar.plotter_status_label
+        self._connect_button = bar.connect_button
+        self._pen_up_button = bar.pen_up_button
+        self._pen_down_button = bar.pen_down_button
+        self._home_button = bar.home_button
+        self._motors_off_button = bar.motors_off_button
+        self._plotter_refresh_button = bar.refresh_button
+        self._plot_layer_button = bar.plot_layer_button
+        self._plot_checked_button = bar.plot_checked_button
+        self._plot_stop_button = bar.stop_button
+        self._plot_stop_button.setEnabled(False)
+        self._multi_continue_button = bar.continue_button
+        self._estimate_button = bar.estimate_button
+        self._estimate_label = bar.estimate_label
+        self._status_label = bar.status_label
+        self._plot_activity_label = bar.activity_label
+        self._plotter_message_label = bar.plotter_message_label
+        self._pen_change_label = bar.pen_change_label
+        self._plot_progress_headline = bar.progress_headline
+        self._plot_progress_bar = bar.progress_bar
+        self._plot_progress_timing = bar.progress_timing
+        self._plot_progress_next = bar.progress_next
+
+        self.setCentralWidget(content)
+
+    def _wire_ui(self) -> None:
+        bar = self._action_bar
+        self._pen_up_button.clicked.connect(self._plotter_service.pen_up)
+        self._pen_down_button.clicked.connect(self._plotter_service.pen_down)
+        self._home_button.clicked.connect(self._on_home)
+        self._motors_off_button.clicked.connect(self._on_motors_off)
+        self._plotter_refresh_button.clicked.connect(self._plotter_service.refresh)
+        bar.connect_button.clicked.connect(self._plotter_service.refresh)
+        self._plot_layer_button.clicked.connect(self._on_plot_selected_layer)
+        self._plot_checked_button.clicked.connect(self._on_plot_checked_layers)
+        self._plot_stop_button.clicked.connect(self._on_stop_plot)
+        self._multi_continue_button.clicked.connect(self._on_multi_continue)
+        self._estimate_button.clicked.connect(self._on_estimate_plot)
+
+        device = self._device_panel
+        device.refresh_requested.connect(self._plotter_service.refresh)
+        device.pen_up_requested.connect(self._plotter_service.pen_up)
+        device.pen_down_requested.connect(self._plotter_service.pen_down)
+        device.home_requested.connect(self._on_home)
+        device.motors_off_requested.connect(self._on_motors_off)
+
+        self._open_svg_empty_button.clicked.connect(self._open_svg_action.trigger)
+        self._open_svg_persistent_button.clicked.connect(self._open_svg_action.trigger)
+        self._open_svg_action.enabledChanged.connect(self._open_svg_empty_button.setEnabled)
+        self._open_svg_action.enabledChanged.connect(self._open_svg_persistent_button.setEnabled)
+        self._open_svg_action.enabledChanged.connect(self._top_bar.open_button.setEnabled)
+
+        top = self._top_bar
+        top.open_requested.connect(self._open_svg_action.trigger)
+        top.preview_requested.connect(self._on_nav_preview)
+        top.layers_toggled.connect(self._on_layers_sidebar_toggled)
+        top.plot_requested.connect(self._on_nav_plot)
+        top.settings_requested.connect(
+            lambda: self._properties_panel.set_current_tab(TAB_PLOT_SETTINGS)
+        )
+        top.device_requested.connect(lambda: self._properties_panel.set_current_tab(TAB_DEVICE))
+
     def _apply_launch_geometry(self) -> None:
         screen = QGuiApplication.primaryScreen()
         available = None if screen is None else screen.availableGeometry().size()
@@ -511,6 +441,7 @@ class MainWindow(QMainWindow):
         )
         self.setMinimumSize(minimum[0], minimum[1])
         self.resize(initial[0], initial[1])
+        self._splitter.setSizes(splitter_sizes_for_width(initial[0]))
 
     @property
     def project_file_path(self) -> Path | None:
@@ -551,6 +482,55 @@ class MainWindow(QMainWindow):
         self._save_project_as_action.triggered.connect(self._save_project_as)
         file_menu.addAction(self._save_project_as_action)
 
+        view_menu = self.menuBar().addMenu("&View")
+        self._toggle_layers_action = QAction("Layers Sidebar", self)
+        self._toggle_layers_action.setCheckable(True)
+        self._toggle_layers_action.setChecked(True)
+        self._toggle_layers_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        self._toggle_layers_action.toggled.connect(self._top_bar.layers_button.setChecked)
+        view_menu.addAction(self._toggle_layers_action)
+        view_menu.addSeparator()
+        fit_action = QAction("Fit Preview", self)
+        fit_action.setShortcut(QKeySequence("Ctrl+0"))
+        fit_action.triggered.connect(self._preview.fit_view)
+        view_menu.addAction(fit_action)
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn)
+        zoom_in_action.triggered.connect(self._preview.zoom_in)
+        view_menu.addAction(zoom_in_action)
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setShortcut(QKeySequence.StandardKey.ZoomOut)
+        zoom_out_action.triggered.connect(self._preview.zoom_out)
+        view_menu.addAction(zoom_out_action)
+        view_menu.addSeparator()
+        for label, index in (
+            ("Transform", TAB_TRANSFORM),
+            ("Plot Settings", TAB_PLOT_SETTINGS),
+            ("Device", TAB_DEVICE),
+        ):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(f"Ctrl+{index + 1}"))
+            action.triggered.connect(
+                lambda _checked=False, i=index: self._properties_panel.set_current_tab(i),
+            )
+            view_menu.addAction(action)
+
+    # ------------------------------------------------------------- navigation
+    def _on_nav_preview(self) -> None:
+        self._preview.fit_view()
+        self._properties_panel.set_current_tab(TAB_TRANSFORM)
+
+    def _on_nav_plot(self) -> None:
+        self._properties_panel.set_current_tab(TAB_PLOT_SETTINGS)
+        if self._plot_layer_button.isEnabled():
+            self._plot_layer_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _on_layers_sidebar_toggled(self, visible: bool) -> None:
+        self._layers_panel.setVisible(visible)
+        if self._toggle_layers_action.isChecked() != visible:
+            self._toggle_layers_action.setChecked(visible)
+
+    # ------------------------------------------------------------- properties
     @property
     def document(self) -> SvgDocument | None:
         return self._document
@@ -571,14 +551,12 @@ class MainWindow(QMainWindow):
     def multi_layer_service(self) -> MultiLayerPlotService:
         return self._multi_layer_service
 
+    # ------------------------------------------------------------ plotter UI
     def _apply_plotter_status(self, status: PlotterStatus) -> None:
-        if status.state is PlotterConnectionState.CONNECTED:
-            indicator = "● Connected"
-        elif status.state is PlotterConnectionState.ERROR:
-            indicator = "● Error"
-        else:
-            indicator = "○ Not connected"
-        self._plotter_status_label.setText(indicator)
+        self._action_bar.set_connection_state(status.state)
+        model_name = self._plot_settings.current_model_name()
+        self._top_bar.set_device(model_name, status.state)
+        self._device_panel.apply_status(status, model_name=model_name)
         plotter_idle = not self._plotter_service.plot_state.is_active
         job_idle = not self._multi_layer_service.job.is_active
         if plotter_idle and job_idle:
@@ -615,6 +593,7 @@ class MainWindow(QMainWindow):
         fraction_label = progress_fraction_label(progress)
         if progress.estimated_fraction is not None:
             value = int(round(progress.estimated_fraction * 100))
+            self._plot_progress_bar.setRange(0, 100)
             self._plot_progress_bar.setValue(min(100, max(0, value)))
             self._plot_progress_bar.setFormat(fraction_label)
         else:
@@ -626,6 +605,7 @@ class MainWindow(QMainWindow):
         self._plot_progress_next.setVisible(bool(next_line))
 
     def _set_plot_progress_visible(self, visible: bool) -> None:
+        self._action_bar.progress_row.setVisible(visible)
         self._plot_progress_headline.setVisible(visible)
         self._plot_progress_bar.setVisible(visible)
         self._plot_progress_timing.setVisible(visible)
@@ -636,24 +616,25 @@ class MainWindow(QMainWindow):
 
     def _apply_multi_layer_job(self, job: MultiLayerPlotJob) -> None:
         if job.state is MultiLayerJobState.IDLE:
-            self._pen_change_label.setVisible(False)
-            self._multi_continue_button.setVisible(False)
+            self._set_pen_change_visible(False)
             return
 
         if job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE:
             self._plot_activity_label.setText(job.progress_label)
             self._update_pen_change_panel(job)
-            self._pen_change_label.setVisible(True)
-            self._multi_continue_button.setVisible(True)
+            self._set_pen_change_visible(True)
         elif job.state is MultiLayerJobState.PLOTTING:
-            self._pen_change_label.setVisible(False)
-            self._multi_continue_button.setVisible(False)
+            self._set_pen_change_visible(False)
             self._plot_activity_label.setText(job.progress_label)
         else:
-            self._pen_change_label.setVisible(False)
-            self._multi_continue_button.setVisible(False)
+            self._set_pen_change_visible(False)
             self._plot_activity_label.setText(job.message)
         self._update_plot_controls()
+
+    def _set_pen_change_visible(self, visible: bool) -> None:
+        self._action_bar.pen_change_banner.setVisible(visible)
+        self._pen_change_label.setVisible(visible)
+        self._multi_continue_button.setVisible(visible)
 
     def _update_pen_change_panel(self, job: MultiLayerPlotJob) -> None:
         nxt = job.current_layer
@@ -663,16 +644,14 @@ class MainWindow(QMainWindow):
         swatch = _color_swatch_text(nxt.representative_color)
         if nxt.representative_color:
             body = (
-                f"Layer {job.completed_count} complete\n\n"
-                f"Next layer:\n{swatch} {nxt.name}\n\n"
-                f"Change the pen to {nxt.name}."
+                f"Layer {job.completed_count} complete — next layer: {swatch} {nxt.name}. "
+                f"Change the pen to {nxt.name}, then press Continue."
             )
         else:
             human = job.current_index + 1
             body = (
-                f"Layer {job.completed_count} complete\n\n"
-                f"Next layer:\nLayer {human}\n\n"
-                f"Change the pen for the next layer."
+                f"Layer {job.completed_count} complete — next layer: Layer {human}. "
+                "Change the pen for the next layer, then press Continue."
             )
         self._pen_change_label.setText(body)
 
@@ -714,7 +693,10 @@ class MainWindow(QMainWindow):
             and not plot_active
             and not stopping
         )
-        self._plotter_refresh_button.setEnabled(not plot_active and not job_active)
+        refresh_ok = not plot_active and not job_active
+        self._plotter_refresh_button.setEnabled(refresh_ok)
+        self._connect_button.setEnabled(refresh_ok)
+        self._device_panel.set_refresh_enabled(refresh_ok)
         pen_ok = (
             self._plotter_service.status.pen_commands_enabled
             and not plot_active
@@ -727,6 +709,7 @@ class MainWindow(QMainWindow):
         self._pen_down_button.setEnabled(pen_ok)
         self._home_button.setEnabled(pen_ok)
         self._motors_off_button.setEnabled(pen_ok)
+        self._device_panel.set_manual_controls_enabled(pen_ok)
         self._estimate_button.setEnabled(
             self._document is not None
             and (layer is not None or len(checked) >= 1)
@@ -914,6 +897,7 @@ class MainWindow(QMainWindow):
             return
         self._plotter_service.request_safe_stop()
 
+    # ------------------------------------------------------------ documents
     def _open_svg(self) -> None:
         if self._multi_layer_service.job.is_active:
             return
@@ -1132,7 +1116,7 @@ class MainWindow(QMainWindow):
 
     def _sync_preview_empty_state(self) -> None:
         has_document = self._document is not None
-        self._preview_stack.setCurrentIndex(1 if has_document else 0)
+        self._workspace.show_document(has_document)
         self._open_svg_persistent_button.setVisible(has_document)
 
     def _apply_document(self, document: SvgDocument, *, reset_transform: bool = True) -> None:
@@ -1141,6 +1125,7 @@ class MainWindow(QMainWindow):
             transform.validate()
             self._preview.set_artwork_transform(transform)
             self._sync_artwork_controls_from_preview()
+        self._preview.fit_view()
         self._document = document
         self._layers = layers_for_document(document)
         self._status_label.setText(document.name)
@@ -1159,9 +1144,8 @@ class MainWindow(QMainWindow):
         self._layers_list.blockSignals(True)
         self._layers_list.clear()
         for index, layer in enumerate(self._layers, start=1):
-            item = QListWidgetItem(f"{index}  {layer.list_label}")
-            item.setIcon(_layer_swatch_icon(layer.representative_color))
-            item.setData(Qt.ItemDataRole.UserRole, layer.layer_id)
+            item = QListWidgetItem()
+            populate_layer_item(item, layer, index)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             self._layers_list.addItem(item)
@@ -1169,6 +1153,7 @@ class MainWindow(QMainWindow):
             self._layers_list.setCurrentRow(0)
         self._layers_list.blockSignals(False)
         self._updating_layers = False
+        self._layers_panel.set_layer_count(len(self._layers))
         self._update_preview_for_current_layer()
         self._update_plot_controls()
 
@@ -1187,6 +1172,7 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
         self._update_plot_controls()
 
+    # --------------------------------------------------------------- preview
     def _update_preview_for_current_layer(self) -> None:
         if self._document is None or not self._layers:
             self._preview.clear_preview()
@@ -1300,6 +1286,7 @@ class MainWindow(QMainWindow):
         self._apply_margin_limits()
         self._refresh_artwork_transform_panel()
         self._schedule_prepared_preview_refresh()
+        self._apply_plotter_status(self._plotter_service.status)
 
     def _on_fallback_work_area_changed(self, _index: int) -> None:
         area = _coerce_fallback_work_area(self._fallback_work_area_combo.currentData())
@@ -1467,7 +1454,8 @@ class MainWindow(QMainWindow):
         if document is None:
             self._bounds_check = None
             self._bounds_status_label.setText("")
-            self._bounds_status_label.setStyleSheet("")
+            self._bounds_status_label.setVisible(False)
+            set_role(self._bounds_status_label, "caption")
             self._refresh_preview_work_area()
             return
 
@@ -1475,9 +1463,10 @@ class MainWindow(QMainWindow):
             document.raw_text,
             self._settings_service.plot_settings,
         )
-        prefix, color = _bounds_status_style(self._bounds_check.status)
+        prefix, role = _bounds_status_style(self._bounds_check.status)
         self._bounds_status_label.setText(f"{prefix}{self._bounds_check.message}")
-        self._bounds_status_label.setStyleSheet(f"color: {color};")
+        self._bounds_status_label.setVisible(True)
+        set_role(self._bounds_status_label, role)
         self._update_plot_controls()
 
 
@@ -1502,13 +1491,14 @@ def _coerce_work_area_orientation(value: object) -> WorkAreaOrientation | None:
 
 
 def _bounds_status_style(status: BoundsStatus) -> tuple[str, str]:
+    """Prefix glyph and stylesheet ``role`` for the bounds preflight label."""
     if status is BoundsStatus.OK:
-        return "✓ ", "#1a7f37"
+        return "✓ ", "status-ok"
     if status is BoundsStatus.UNKNOWN_MODEL:
-        return "⚠ ", "#9a6700"
+        return "⚠ ", "status-warn"
     if status is BoundsStatus.OUT_OF_BOUNDS:
-        return "✕ ", "#cf222e"
-    return "✕ ", "#cf222e"
+        return "✕ ", "status-error"
+    return "✕ ", "status-error"
 
 
 def _color_swatch_text(color: str | None) -> str:
@@ -1517,20 +1507,3 @@ def _color_swatch_text(color: str | None) -> str:
         if qcolor.isValid():
             return "●"
     return "●"
-
-
-def _layer_swatch_icon(color: str | None) -> QIcon:
-    pixmap = QPixmap(16, 16)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    if color:
-        qcolor = QColor(color)
-        brush_color = qcolor if qcolor.isValid() else QColor("#808080")
-    else:
-        brush_color = QColor("#c0c0c0")
-    painter.setBrush(brush_color)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(2, 2, 12, 12)
-    painter.end()
-    return QIcon(pixmap)
