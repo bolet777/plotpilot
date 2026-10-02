@@ -26,7 +26,11 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.artwork_transform import (
+    ArtworkTransform,
+    oriented_page_size,
+    resolve_rotation_degrees,
+)
 from plotpilot.models.print_margins import PrintableArea
 from plotpilot.services.preview_work_area import (
     PhysicalPreviewLayout,
@@ -111,6 +115,29 @@ def _polygons_from_polylines(
             continue
         polygons.append(QPolygonF([QPointF(x, y) for x, y in subpath]))
     return polygons
+
+
+def apply_page_orientation(
+    painter: QPainter,
+    rotation_degrees: int,
+    *,
+    page_width: float,
+    page_height: float,
+) -> None:
+    """Compose the page rotation onto *painter* (units of the current painter space).
+
+    Mirrors ``artwork_transform.orient_point``: after this call, painting the
+    unrotated page at (0, 0) lands it rotated with its new top-left at (0, 0).
+    """
+    if rotation_degrees == 90:
+        painter.translate(page_height, 0.0)
+        painter.rotate(90.0)
+    elif rotation_degrees == 180:
+        painter.translate(page_width, page_height)
+        painter.rotate(180.0)
+    elif rotation_degrees == 270:
+        painter.translate(0.0, page_width)
+        painter.rotate(-90.0)
 
 
 def _polylines_bounds(
@@ -353,8 +380,41 @@ class LayerPreviewWidget(QWidget):
 
     def set_artwork_transform(self, transform: ArtworkTransform) -> None:
         transform.validate()
+        orientation_changed = transform.orientation is not self._artwork_transform.orientation
         self._artwork_transform = transform
+        if orientation_changed:
+            self._invalidate_pixmap()
         self.update()
+
+    @property
+    def effective_rotation_degrees(self) -> int:
+        """Page rotation the pipeline applies for the current transform and page setup."""
+        physical = self._physical
+        if physical is None or physical.svg_width_mm <= 0 or physical.svg_height_mm <= 0:
+            return 0
+        area = physical.printable_area
+        if area is not None:
+            printable_w, printable_h = area.width_mm, area.height_mm
+        else:
+            printable_w = physical.work_area.width_mm
+            printable_h = physical.work_area.height_mm
+        return resolve_rotation_degrees(
+            self._artwork_transform.orientation,
+            page_width_mm=physical.svg_width_mm,
+            page_height_mm=physical.svg_height_mm,
+            printable_width_mm=printable_w,
+            printable_height_mm=printable_h,
+        )
+
+    def _oriented_page_mm(self) -> tuple[float, float]:
+        physical = self._physical
+        if physical is None:
+            return 0.0, 0.0
+        return oriented_page_size(
+            physical.svg_width_mm,
+            physical.svg_height_mm,
+            self.effective_rotation_degrees,
+        )
 
     def set_transform_controls_enabled(self, enabled: bool) -> None:
         self._transform_controls_enabled = enabled
@@ -519,9 +579,10 @@ class LayerPreviewWidget(QWidget):
         if self._physical is None:
             return None
         available = self._available_rect()
+        page_w_mm, page_h_mm = self._oriented_page_mm()
         return compute_physical_preview_layout(
-            self._physical.svg_width_mm,
-            self._physical.svg_height_mm,
+            page_w_mm,
+            page_h_mm,
             self._physical.work_area.width_mm,
             self._physical.work_area.height_mm,
             available.width(),
@@ -782,10 +843,10 @@ class LayerPreviewWidget(QWidget):
         delta_x_mm = delta_px.x() / layout.mm_to_px
         delta_y_mm = delta_px.y() / layout.mm_to_px
         current = self._artwork_transform
-        moved = ArtworkTransform(
+        moved = replace(
+            current,
             x_mm=current.x_mm + delta_x_mm,
             y_mm=current.y_mm + delta_y_mm,
-            scale=current.scale,
         )
         self.set_artwork_transform(moved)
         self.artwork_transform_changed.emit(moved)
@@ -842,8 +903,11 @@ class LayerPreviewWidget(QWidget):
     def _paint_physical_preview(self, painter: QPainter, layout: PhysicalPreviewLayout) -> None:
         transform = self._artwork_transform
         scale_px = layout.mm_to_px
-        page_w_px = layout.svg_rect_mm.width_mm * scale_px
-        page_h_px = layout.svg_rect_mm.height_mm * scale_px
+        rotation = self.effective_rotation_degrees
+        # Unrotated page in pixels: the orientation is composed onto the painter.
+        physical = self._physical
+        page_w_px = (physical.svg_width_mm if physical else 0.0) * scale_px
+        page_h_px = (physical.svg_height_mm if physical else 0.0) * scale_px
         page_target = QRectF(0.0, 0.0, page_w_px, page_h_px)
         work_w_px = layout.work_area_rect_mm.width_mm * scale_px
         work_h_px = layout.work_area_rect_mm.height_mm * scale_px
@@ -870,12 +934,21 @@ class LayerPreviewWidget(QWidget):
         # ghost is the only artwork shown, so it is drawn a little stronger.
         ghost_opacity = self._GHOST_OPACITY_PENDING if self._clip_pending else self._GHOST_OPACITY
         if self.uses_geometry_context and work_w_px > 0 and work_h_px > 0:
-            self._paint_geometry_context(painter, transform, scale_px, work_target, ghost_opacity)
+            self._paint_geometry_context(
+                painter,
+                transform,
+                scale_px,
+                work_target,
+                ghost_opacity,
+                rotation=rotation,
+                page_px=(page_w_px, page_h_px),
+            )
         elif self._context_renderer.isValid() and page_w_px > 0 and page_h_px > 0:
             painter.save()
             painter.setClipRect(work_target)
             painter.translate(transform.x_mm * scale_px, transform.y_mm * scale_px)
             painter.scale(transform.scale, transform.scale)
+            apply_page_orientation(painter, rotation, page_width=page_w_px, page_height=page_h_px)
             painter.setOpacity(ghost_opacity)
             self._context_renderer.render(painter, page_target)
             painter.restore()
@@ -957,8 +1030,15 @@ class LayerPreviewWidget(QWidget):
         mm_to_px: float,
         work_target: QRectF,
         opacity: float,
+        *,
+        rotation: int = 0,
+        page_px: tuple[float, float] = (0.0, 0.0),
     ) -> None:
-        """Blit the cached ghost raster at the live transform (translation is free)."""
+        """Blit the cached ghost raster at the live transform (translation is free).
+
+        The page rotation is composed onto the painter in artwork pixels, so the
+        cached raster is reused unchanged for every orientation.
+        """
         bounds = self._context_bounds_mm
         if bounds is None or mm_to_px <= 0:
             return
@@ -966,16 +1046,19 @@ class LayerPreviewWidget(QWidget):
         painter.save()
         painter.setClipRect(work_target)
         painter.setOpacity(opacity)
-        origin = QPointF(
-            transform.x_mm * mm_to_px + bounds.x() * artwork_px,
-            transform.y_mm * mm_to_px + bounds.y() * artwork_px,
+        painter.translate(transform.x_mm * mm_to_px, transform.y_mm * mm_to_px)
+        # page_px is in mm_to_px units; the raster lives in artwork_px units.
+        apply_page_orientation(
+            painter,
+            rotation,
+            page_width=page_px[0] * transform.scale,
+            page_height=page_px[1] * transform.scale,
         )
         pixmap = self._context_pixmap_for(artwork_px)
         if pixmap is not None:
-            painter.drawPixmap(origin, pixmap)
+            painter.drawPixmap(QPointF(bounds.x() * artwork_px, bounds.y() * artwork_px), pixmap)
         else:
             # Too large to rasterize at this zoom: stroke directly.
-            painter.translate(transform.x_mm * mm_to_px, transform.y_mm * mm_to_px)
             painter.scale(artwork_px, artwork_px)
             self._stroke_polygons(painter, self._context_polygons, artwork_px)
         painter.restore()

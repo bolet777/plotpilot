@@ -11,7 +11,11 @@ from xml.etree import ElementTree as ET
 from svgelements import SVG, Arc, Close, Group, Line, Move, Shape
 
 from plotpilot.geometry.liang_barsky import ClipRect, clip_segment
-from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.artwork_transform import (
+    ArtworkTransform,
+    orient_point,
+    resolve_rotation_degrees,
+)
 from plotpilot.svg.page_geometry import SvgPageGeometry, parse_page_geometry
 from plotpilot.svg.plot_dimensions import PlotDimensionError
 
@@ -73,11 +77,15 @@ def clip_document_polylines(
     clip_y_min_mm: float = 0.0,
     clip_x_max_mm: float | None = None,
     clip_y_max_mm: float | None = None,
+    page_width_mm: float | None = None,
+    page_height_mm: float | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Place document polylines and clip them to an arbitrary machine rectangle.
 
     Omitted clip edges use the full viewport starting at (0, 0). Product callers
     pass the printable-area edges so margins do not shift machine coordinates.
+    ``page_width_mm`` / ``page_height_mm`` are required when the transform
+    orientation is not ``PRESERVED`` (the page is rotated about its own size).
     """
     transform.validate()
     clip = _resolve_clip_rect(
@@ -88,7 +96,13 @@ def clip_document_polylines(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
-    return _clip_document_subpaths(polylines, transform, clip)
+    return _clip_document_subpaths(
+        polylines,
+        transform,
+        clip,
+        page_width_mm=page_width_mm,
+        page_height_mm=page_height_mm,
+    )
 
 
 def prepare_positioned_plot_svg(
@@ -113,7 +127,13 @@ def prepare_positioned_plot_svg(
         clip_y_max_mm=clip_y_max_mm,
     )
     flattened = flatten_document_geometry(svg_text)
-    clipped_paths = _clip_document_subpaths(flattened.polylines, transform, clip)
+    clipped_paths = _clip_document_subpaths(
+        flattened.polylines,
+        transform,
+        clip,
+        page_width_mm=flattened.page_width_mm,
+        page_height_mm=flattened.page_height_mm,
+    )
 
     return emit_validated_plot_svg(
         clipped_paths,
@@ -297,13 +317,51 @@ def _flatten_document_subpaths(
     return subpaths
 
 
+def resolve_transform_rotation(
+    transform: ArtworkTransform,
+    clip: ClipRect,
+    *,
+    page_width_mm: float | None,
+    page_height_mm: float | None,
+) -> int:
+    """Effective rotation for *transform* against the clip (printable) rectangle."""
+    if not transform.needs_page_size:
+        return 0
+    if (
+        page_width_mm is None
+        or page_height_mm is None
+        or page_width_mm <= 0.0
+        or page_height_mm <= 0.0
+    ):
+        msg = "Artwork orientation requires a document page size."
+        raise PlotViewportError(msg)
+    return resolve_rotation_degrees(
+        transform.orientation,
+        page_width_mm=page_width_mm,
+        page_height_mm=page_height_mm,
+        printable_width_mm=clip.x_max - clip.x_min,
+        printable_height_mm=clip.y_max - clip.y_min,
+    )
+
+
 def _clip_document_subpaths(
     polylines: tuple[tuple[tuple[float, float], ...], ...] | list[list[tuple[float, float]]],
     transform: ArtworkTransform,
     clip: ClipRect,
+    *,
+    page_width_mm: float | None = None,
+    page_height_mm: float | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
-    """Apply placement and Liang–Barsky clipping to pre-flattened document polylines."""
+    """Orient, place, and Liang–Barsky clip pre-flattened document polylines."""
     transform.validate()
+    rotation = resolve_transform_rotation(
+        transform,
+        clip,
+        page_width_mm=page_width_mm,
+        page_height_mm=page_height_mm,
+    )
+    page_w = page_width_mm or 0.0
+    page_h = page_height_mm or 0.0
     origin_x = transform.x_mm
     origin_y = transform.y_mm
     scale = transform.scale
@@ -319,6 +377,13 @@ def _clip_document_subpaths(
 
     def plot_segment(x0_mm: float, y0_mm: float, x1_mm: float, y1_mm: float) -> None:
         nonlocal current
+        if rotation:
+            x0_mm, y0_mm = orient_point(
+                x0_mm, y0_mm, rotation, page_width_mm=page_w, page_height_mm=page_h
+            )
+            x1_mm, y1_mm = orient_point(
+                x1_mm, y1_mm, rotation, page_width_mm=page_w, page_height_mm=page_h
+            )
         ax0 = origin_x + x0_mm * scale
         ay0 = origin_y + y0_mm * scale
         ax1 = origin_x + x1_mm * scale

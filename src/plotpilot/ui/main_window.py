@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.artwork_transform import ArtworkTransform, resolve_rotation_degrees
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -74,6 +74,7 @@ from plotpilot.services.project_file_service import (
 )
 from plotpilot.services.settings_service import SettingsService
 from plotpilot.services.svg_loader import SvgLoadError, load_svg_from_path
+from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
 from plotpilot.ui.action_bar import ActionBar
 from plotpilot.ui.artwork_transform_controls import ArtworkTransformControls
 from plotpilot.ui.device_panel import DevicePanel
@@ -216,6 +217,7 @@ class MainWindow(QMainWindow):
         self._layers: list[SvgLayer] = []
         self._updating_layers = False
         self._bounds_check: PlotBoundsCheck | None = None
+        self._bounds_rotation_degrees = 0
         self._project_file_path: Path | None = None
         self._project_dirty = False
 
@@ -1332,6 +1334,7 @@ class MainWindow(QMainWindow):
             work_area.width_mm,
             work_area.height_mm,
         )
+        self._artwork_controls.set_page_dimensions(*self._document_page_mm())
         self._artwork_controls.set_artwork_bounds(self._current_artwork_bounds())
         if work_area.from_fallback:
             orientation = self._settings_service.preview_fallback_work_area_orientation
@@ -1350,6 +1353,60 @@ class MainWindow(QMainWindow):
         self._artwork_controls.set_plot_area_text(plot_line)
         self._artwork_controls.set_printable_text(self._printable_size_text(work_area))
         self._artwork_controls.set_status_lines(status_lines)
+        if self._document is not None and (
+            self._effective_rotation_degrees() != self._bounds_rotation_degrees
+        ):
+            # Auto-rotate can flip when the page, work area, or margins change.
+            self._refresh_bounds_status()
+
+    def _document_page_mm(self) -> tuple[float, float]:
+        """Unrotated page size of the current document; (0, 0) when unknown."""
+        document = self._document
+        if document is None:
+            return 0.0, 0.0
+        layer = self._current_layer()
+        if layer is not None:
+            geometry = self._geometry_cache.lookup(id(document), layer.layer_id)
+            if geometry is not None and geometry.page_width_mm > 0 and geometry.page_height_mm > 0:
+                return geometry.page_width_mm, geometry.page_height_mm
+        try:
+            physical = parse_physical_size(document.raw_text)
+        except PlotDimensionError:
+            return 0.0, 0.0
+        return physical.width_mm, physical.height_mm
+
+    def _effective_rotation_degrees(self) -> int:
+        """Rotation the pipeline applies for the current orientation, page, and margins.
+
+        Computed from the same inputs as the preview/plot pipeline so it does not
+        depend on the refresh order of the Transform tab widgets.
+        """
+        orientation = self._preview.artwork_transform.orientation
+        page_w, page_h = self._document_page_mm()
+        if page_w <= 0 or page_h <= 0:
+            return 0
+        work_area = resolve_preview_work_area(
+            self._settings_service.plot_settings,
+            fallback=self._settings_service.preview_fallback_work_area,
+            fallback_orientation=self._settings_service.preview_fallback_work_area_orientation,
+        )
+        if work_area is None:
+            return 0
+        try:
+            area = printable_area_for(
+                work_area.width_mm,
+                work_area.height_mm,
+                self._settings_service.print_margins,
+            )
+        except PrintMarginsError:
+            return 0
+        return resolve_rotation_degrees(
+            orientation,
+            page_width_mm=page_w,
+            page_height_mm=page_h,
+            printable_width_mm=area.width_mm,
+            printable_height_mm=area.height_mm,
+        )
 
     def _current_artwork_bounds(self) -> ArtworkBoundsMm:
         """Unscaled document-mm extent of the selected layer, before placement."""
@@ -1425,8 +1482,14 @@ class MainWindow(QMainWindow):
         mark_dirty: bool = True,
     ) -> None:
         transform.validate()
+        orientation_changed = (
+            transform.orientation is not self._preview.artwork_transform.orientation
+        )
         self._preview.set_artwork_transform(transform)
         self._sync_artwork_controls_from_preview()
+        if orientation_changed:
+            # The page-level bounds preflight depends on the effective rotation.
+            self._refresh_bounds_status()
         self._schedule_prepared_preview_refresh()
         if mark_dirty:
             self._mark_project_dirty()
@@ -1452,9 +1515,12 @@ class MainWindow(QMainWindow):
             self._refresh_preview_work_area()
             return
 
+        rotation = self._effective_rotation_degrees()
+        self._bounds_rotation_degrees = rotation
         self._bounds_check = check_plot_bounds(
             document.raw_text,
             self._settings_service.plot_settings,
+            rotation_degrees=rotation,
         )
         prefix, role = _bounds_status_style(self._bounds_check.status)
         self._bounds_status_label.setText(f"{prefix}{self._bounds_check.message}")

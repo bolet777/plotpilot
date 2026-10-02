@@ -16,8 +16,11 @@ def _effective_page_mm(
     height_mm: float,
     *,
     auto_rotate: bool,
+    rotation_degrees: int = 0,
 ) -> tuple[float, float]:
-    """Match axicli default: rotate when height > width."""
+    """Page footprint after PlotPilot's rotation, or axicli's height > width rule."""
+    if rotation_degrees in (90, 270):
+        return height_mm, width_mm
     if auto_rotate and height_mm > width_mm:
         return height_mm, width_mm
     return width_mm, height_mm
@@ -33,12 +36,14 @@ def check_plot_bounds(
     plot_settings: PlotSettings,
     *,
     auto_rotate: bool = False,
+    rotation_degrees: int = 0,
 ) -> PlotBoundsCheck:
     """Compare root SVG page size to selected model travel limits.
 
     PlotPilot always passes axicli ``-N``, so the default comparison does not
-    swap portrait pages. Pass ``auto_rotate=True`` only to inspect axicli's
-    config-default behavior.
+    swap portrait pages. ``rotation_degrees`` is the rotation PlotPilot itself
+    applies (Transform → Orientation); 90/270 swap the page footprint. Pass
+    ``auto_rotate=True`` only to inspect axicli's config-default behavior.
     """
     try:
         physical = parse_physical_size(svg_text)
@@ -73,12 +78,14 @@ def check_plot_bounds(
         physical.width_mm,
         physical.height_mm,
         auto_rotate=auto_rotate,
+        rotation_degrees=rotation_degrees,
     )
     fits = _page_fits(page_x, page_y, model.max_width_mm, model.max_height_mm)
 
     would_fit_rotated = False
     if not fits:
-        alt_x, alt_y = physical.height_mm, physical.width_mm
+        # A further quarter turn relative to the footprint actually being plotted.
+        alt_x, alt_y = page_y, page_x
         if (alt_x, alt_y) != (page_x, page_y) and _page_fits(
             alt_x,
             alt_y,
@@ -88,6 +95,8 @@ def check_plot_bounds(
             would_fit_rotated = True
 
     doc_line = f"Document: {_fmt_mm(physical.width_mm)} × {_fmt_mm(physical.height_mm)} mm"
+    if rotation_degrees in (90, 270):
+        doc_line += f" (rotated: {_fmt_mm(page_x)} × {_fmt_mm(page_y)} mm)"
     model_line = (
         f"{model.display_name}: max {_fmt_mm(model.max_width_mm)} × "
         f"{_fmt_mm(model.max_height_mm)} mm"
@@ -108,7 +117,7 @@ def check_plot_bounds(
     if would_fit_rotated:
         extra = (
             "\nThis page would fit the selected model if rotated 90°. "
-            "PlotPilot keeps the preview orientation (axicli -N)."
+            "Use Transform → Orientation (Auto-rotate or Rotate 90°)."
         )
 
     return PlotBoundsCheck(

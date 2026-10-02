@@ -88,7 +88,7 @@ Every user-facing capability of V1 and where it lives in V2.
 | Double-click slider to reset | Kept | Kept |
 | Margins H / V spin boxes (0.1 mm) | Transform tab → Margins card; mirrored sliders added; optional link toggle | Kept (+ convenience) |
 | Plot area and printable area dimensions | Margins card info block + small diagram | Kept |
-| "Orientation: preserved (no auto-rotate)" label (was in Plot Settings) | Transform tab → Orientation card (radio shown selected; other options disabled with tooltip) | Relocated |
+| "Orientation: preserved (no auto-rotate)" label (was in Plot Settings) | Transform tab → Orientation card: Preserved / Auto-rotate to fit / Rotate 90° CCW / Rotate 90° CW. The rotation is applied by PlotPilot (`ArtworkTransform.orientation`) before clipping, so preview = plot; axicli still always receives `-N`. Auto rotates 90° CCW only when the page and the printable area disagree on portrait/landscape. Saved in the project file (`artwork_transform.orientation`). | Implemented |
 | Reset All (transform) | Transform tab bottom | Kept |
 
 ### Plot settings

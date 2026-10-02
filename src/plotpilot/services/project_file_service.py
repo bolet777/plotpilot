@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from plotpilot.models.artwork_transform import ArtworkTransform, ArtworkTransformError
+from plotpilot.models.artwork_transform import (
+    ArtworkOrientation,
+    ArtworkTransform,
+    ArtworkTransformError,
+    parse_artwork_orientation,
+)
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError
 from plotpilot.models.project_session import ProjectSession
@@ -67,6 +72,7 @@ def session_to_document(
             "x_mm": session.artwork_transform.x_mm,
             "y_mm": session.artwork_transform.y_mm,
             "scale": session.artwork_transform.scale,
+            "orientation": session.artwork_transform.orientation.value,
         },
         "plot_settings": {
             "pen_down_speed": settings.pen_down_speed,
@@ -160,11 +166,13 @@ def read_project_file(project_file: Path) -> ProjectSession:
     elif not isinstance(transform_block, dict):
         raise ProjectFileError("Artwork transform in this project file is invalid.")
     else:
+        orientation = _parse_orientation(transform_block.get("orientation"))
         try:
             artwork_transform = ArtworkTransform(
                 x_mm=float(transform_block.get("x_mm", 0.0)),
                 y_mm=float(transform_block.get("y_mm", 0.0)),
                 scale=float(transform_block.get("scale", 1.0)),
+                orientation=orientation,
             )
             artwork_transform.validate()
         except (TypeError, ValueError, ArtworkTransformError) as exc:
@@ -199,6 +207,16 @@ def unmatched_layer_ids(
         if layer_id not in available_layer_ids:
             missing.append(layer_id)
     return missing
+
+
+def _parse_orientation(value: object) -> ArtworkOrientation:
+    """Missing orientation (files written before the Orientation card) is PRESERVED."""
+    if value is None:
+        return ArtworkOrientation.PRESERVED
+    orientation = parse_artwork_orientation(value)
+    if orientation is None:
+        raise ProjectFileError("Artwork orientation in this project file is invalid.")
+    return orientation
 
 
 def _parse_plot_settings(block: object) -> PlotSettings:

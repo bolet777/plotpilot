@@ -56,7 +56,8 @@ class PlotSettings:
 
     ``path_reordering`` defaults to strict file order (``-G4``) so path order does
     not depend on ``axidraw_conf.py``. ``None`` is the explicit driver-default policy.
-    Orientation is always preserved (``-N``); there is no enable flag.
+    axicli orientation is always preserved (``-N``); there is no enable flag. Page
+    rotation is a PlotPilot-side ``ArtworkTransform`` concern, not a plot setting.
     """
 
     pen_down_speed: int | None = None
@@ -139,6 +140,8 @@ def append_axicli_motion_argv(argv: list[str], settings: PlotSettings) -> None:
         argv.extend(["-G", str(settings.path_reordering)])
     # Always preserve SVG orientation. axicli cannot force auto-rotate on, and
     # the rotation direction is config-only. See specs/023-axicli-controls/research.md.
+    # User-chosen rotation is applied by PlotPilot (ArtworkTransform.orientation)
+    # to the prepared SVG before it reaches axicli.
     argv.append("-N")
     if settings.const_speed:
         argv.append("-C")

@@ -6,7 +6,11 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from plotpilot.models.artwork_transform import DEFAULT_SCALE_MAX, DEFAULT_SCALE_MIN
+from plotpilot.models.artwork_transform import (
+    DEFAULT_SCALE_MAX,
+    DEFAULT_SCALE_MIN,
+    orient_point,
+)
 
 POSITION_STEP_MM = 0.1
 SCALE_STEP_PERCENT = 0.1
@@ -56,6 +60,32 @@ def artwork_bounds_from_polylines(
     if not found:
         return None
     return ArtworkBoundsMm(min_x, max_x, min_y, max_y)
+
+
+def oriented_artwork_bounds(
+    bounds: ArtworkBoundsMm,
+    rotation_degrees: int,
+    *,
+    page_width_mm: float,
+    page_height_mm: float,
+) -> ArtworkBoundsMm:
+    """Bounds of the artwork after rotating the page (still unscaled document mm)."""
+    if rotation_degrees == 0:
+        return bounds
+    corners = [
+        orient_point(
+            x,
+            y,
+            rotation_degrees,
+            page_width_mm=page_width_mm,
+            page_height_mm=page_height_mm,
+        )
+        for x in (bounds.min_x_mm, bounds.max_x_mm)
+        for y in (bounds.min_y_mm, bounds.max_y_mm)
+    ]
+    xs = [x for x, _ in corners]
+    ys = [y for _, y in corners]
+    return ArtworkBoundsMm(min(xs), max(xs), min(ys), max(ys))
 
 
 def axis_translation_limits(

@@ -75,6 +75,8 @@ Enabling auto-rotate from PlotPilot cannot be mirrored in the preview, because t
 
 **Decision:** always pass `-N` on plot and on `-v -T`. Do not offer an Enabled control. Preview, bounds preflight, and the physical plot all assume the prepared SVG orientation. Bounds default `auto_rotate=False`. A portrait page that would fit only after a 90° turn is reported as out of bounds, with a note that PlotPilot keeps preview orientation.
 
+**Follow-up (V2 UI, Transform → Orientation):** the rotation now lives in PlotPilot, not in axicli (audit Q5 option b). `ArtworkTransform.orientation` (`preserved` / `auto` / `cw` / `ccw`) is resolved to 0/90/270° against the document page and the printable area in `geometry/plot_viewport.py`, applied before scale, translation and clipping, and painted identically in the preview. `-N` is still always sent, so axicli never rotates the already-oriented prepared SVG. `auto` mirrors axicli's default direction (CCW) but keys on the *printable area* orientation rather than "height > width".
+
 ## Safety interactions
 
 | Control | Effect on clipping / bounds |

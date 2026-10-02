@@ -9,6 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -25,7 +26,10 @@ from PySide6.QtWidgets import (
 from plotpilot.models.artwork_transform import (
     DEFAULT_SCALE_MAX,
     DEFAULT_SCALE_MIN,
+    ArtworkOrientation,
     ArtworkTransform,
+    resolve_rotation_degrees,
+    rotation_label,
     scale_percent,
     transform_from_scale_percent,
 )
@@ -36,6 +40,7 @@ from plotpilot.ui.transform_slider_mapping import (
     ArtworkBoundsMm,
     axis_translation_limits,
     mm_to_position_slider,
+    oriented_artwork_bounds,
     percent_to_scale_slider,
     position_slider_maximum,
     position_slider_to_mm,
@@ -50,10 +55,32 @@ _NUMERIC_POSITION_MIN = -2000.0
 _NUMERIC_POSITION_MAX = 2000.0
 
 ORIENTATION_TOOLTIP = (
-    "PlotPilot always passes axicli -N so the page keeps the orientation shown in the "
-    "preview. axicli cannot force auto-rotate on from the command line, and the "
-    "rotation direction is only a config-file setting, so the other options are "
-    "not available."
+    "PlotPilot rotates the page itself before clipping, so the preview always shows "
+    "what will be plotted. axicli receives -N and never rotates on its own."
+)
+
+ORIENTATION_OPTIONS: tuple[tuple[ArtworkOrientation, str, str], ...] = (
+    (
+        ArtworkOrientation.PRESERVED,
+        "Preserved (no auto-rotate)",
+        "Keep the page as drawn in the SVG.",
+    ),
+    (
+        ArtworkOrientation.AUTO,
+        "Auto-rotate to fit",
+        "Rotate 90° CCW when the page and the printable area disagree on "
+        "portrait vs landscape (same rule and direction as axicli's default).",
+    ),
+    (
+        ArtworkOrientation.ROTATE_90_CCW,
+        "Rotate 90° CCW",
+        "Always turn the page a quarter turn counter-clockwise.",
+    ),
+    (
+        ArtworkOrientation.ROTATE_90_CW,
+        "Rotate 90° CW",
+        "Always turn the page a quarter turn clockwise.",
+    ),
 )
 
 
@@ -136,6 +163,9 @@ class ArtworkTransformControls(QWidget):
         super().__init__(parent)
         self._work_width_mm = 300.0
         self._work_height_mm = 217.9
+        self._page_width_mm = 0.0
+        self._page_height_mm = 0.0
+        self._orientation = ArtworkOrientation.PRESERVED
         self._artwork_bounds = ArtworkBoundsMm.origin_point()
         self._x_min_mm = 0.0
         self._x_max_mm = 0.0
@@ -292,29 +322,28 @@ class ArtworkTransformControls(QWidget):
         # ---- Orientation ----------------------------------------------------
         orientation_card, orientation_layout = make_card("Orientation", self)
         orientation_card.setToolTip(ORIENTATION_TOOLTIP)
-        self._orientation_preserved = QRadioButton("Preserved (no auto-rotate)", self)
-        self._orientation_preserved.setChecked(True)
-        self._orientation_preserved.setToolTip(ORIENTATION_TOOLTIP)
-        orientation_layout.addWidget(self._orientation_preserved)
-        self._orientation_unavailable: list[QRadioButton] = []
-        for text in ("Auto-rotate to fit", "Rotate 90° CCW", "Rotate 90° CW"):
+        self._orientation_group = QButtonGroup(self)
+        self._orientation_group.setExclusive(True)
+        self._orientation_buttons: dict[ArtworkOrientation, QRadioButton] = {}
+        for orientation, text, tooltip in ORIENTATION_OPTIONS:
             option = QRadioButton(text, self)
-            option.setEnabled(False)
-            option.setToolTip("Not available: " + ORIENTATION_TOOLTIP)
+            option.setToolTip(tooltip)
+            option.setChecked(orientation is self._orientation)
+            self._orientation_group.addButton(option)
+            self._orientation_buttons[orientation] = option
+            option.toggled.connect(
+                lambda checked, value=orientation: self._on_orientation_toggled(value, checked),
+            )
             orientation_layout.addWidget(option)
-            self._orientation_unavailable.append(option)
-        orientation_note = make_wrapping_label(
-            "The page keeps the orientation shown in the preview (axicli -N).",
-            self,
-            role="muted",
-        )
-        orientation_layout.addWidget(orientation_note)
+        self._orientation_note = make_wrapping_label("", self, role="muted")
+        orientation_layout.addWidget(self._orientation_note)
         root.addWidget(orientation_card)
+        self._refresh_orientation_note()
 
         # ---- Reset ----------------------------------------------------------
         self._reset_all = QPushButton("Reset All", self)
         self._reset_all.setToolTip(
-            "Reset position and scale. Margins and plot settings are not changed.",
+            "Reset position, scale and orientation. Margins and plot settings are not changed.",
         )
         self._reset_all.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._reset_all.clicked.connect(self._on_reset_all)
@@ -387,6 +416,40 @@ class ArtworkTransformControls(QWidget):
         self._refresh_position_slider_ranges()
         self._refresh_margin_sliders()
         self._refresh_diagram()
+        self._refresh_orientation_note()
+
+    def set_page_dimensions(self, width_mm: float, height_mm: float) -> None:
+        """Document page size (unrotated) used to resolve the orientation."""
+        self._page_width_mm = max(0.0, width_mm)
+        self._page_height_mm = max(0.0, height_mm)
+        self._refresh_position_slider_ranges()
+        self._refresh_orientation_note()
+
+    @property
+    def orientation(self) -> ArtworkOrientation:
+        return self._orientation
+
+    def effective_rotation_degrees(self) -> int:
+        """Rotation the pipeline will apply for the current orientation and page setup."""
+        if self._orientation is ArtworkOrientation.PRESERVED:
+            return 0
+        if self._page_width_mm <= 0.0 or self._page_height_mm <= 0.0:
+            return 0
+        try:
+            area = printable_area_for(
+                self._work_width_mm,
+                self._work_height_mm,
+                self.print_margins(),
+            )
+        except PrintMarginsError:
+            return 0
+        return resolve_rotation_degrees(
+            self._orientation,
+            page_width_mm=self._page_width_mm,
+            page_height_mm=self._page_height_mm,
+            printable_width_mm=area.width_mm,
+            printable_height_mm=area.height_mm,
+        )
 
     def x_translation_limits(self) -> tuple[float, float]:
         """Calculated X travel ``(min_mm, max_mm)``, before expanding for the current value."""
@@ -428,6 +491,7 @@ class ArtworkTransformControls(QWidget):
             self._refresh_position_slider_ranges()
             self._refresh_margin_sliders()
             self._refresh_diagram()
+            self._refresh_orientation_note()
         finally:
             self._blocking = False
 
@@ -461,12 +525,17 @@ class ArtworkTransformControls(QWidget):
         self._blocking = True
         try:
             self._scale = transform.scale
+            self._orientation = transform.orientation
+            button = self._orientation_buttons.get(transform.orientation)
+            if button is not None and not button.isChecked():
+                button.setChecked(True)
             self._x_spin.setValue(transform.x_mm)
             self._y_spin.setValue(transform.y_mm)
             self._scale_spin.setValue(scale_percent(transform))
             self._refresh_position_slider_ranges()
             self._scale_slider.setValue(percent_to_scale_slider(self._scale_spin.value()))
             self._refresh_scale_presets()
+            self._refresh_orientation_note()
         finally:
             self._blocking = False
 
@@ -493,16 +562,22 @@ class ArtworkTransformControls(QWidget):
                 self._work_height_mm,
                 self.print_margins(),
             )
+            bounds = oriented_artwork_bounds(
+                self._artwork_bounds,
+                self.effective_rotation_degrees(),
+                page_width_mm=self._page_width_mm,
+                page_height_mm=self._page_height_mm,
+            )
             x_limits = axis_translation_limits(
-                artwork_min_mm=self._artwork_bounds.min_x_mm,
-                artwork_max_mm=self._artwork_bounds.max_x_mm,
+                artwork_min_mm=bounds.min_x_mm,
+                artwork_max_mm=bounds.max_x_mm,
                 scale=self._scale,
                 printable_min_mm=area.x_mm,
                 printable_max_mm=area.x_max_mm,
             )
             y_limits = axis_translation_limits(
-                artwork_min_mm=self._artwork_bounds.min_y_mm,
-                artwork_max_mm=self._artwork_bounds.max_y_mm,
+                artwork_min_mm=bounds.min_y_mm,
+                artwork_max_mm=bounds.max_y_mm,
                 scale=self._scale,
                 printable_min_mm=area.y_mm,
                 printable_max_mm=area.y_max_mm,
@@ -575,17 +650,41 @@ class ArtworkTransformControls(QWidget):
             self.print_margins(),
         )
 
-    def _emit_current_transform(self) -> None:
-        if self._blocking:
-            return
-        transform = ArtworkTransform(
+    def _refresh_orientation_note(self) -> None:
+        if self._orientation is ArtworkOrientation.PRESERVED:
+            text = "The page keeps the orientation shown in the preview (axicli -N)."
+        elif self._page_width_mm <= 0.0 or self._page_height_mm <= 0.0:
+            text = "Rotation is applied once a document with a page size is loaded."
+        else:
+            label = rotation_label(self.effective_rotation_degrees())
+            if self._orientation is ArtworkOrientation.AUTO:
+                text = f"Auto: {label} for this page and printable area."
+            else:
+                text = f"Page {label} by PlotPilot before clipping (axicli -N)."
+        self._orientation_note.setText(text)
+
+    def _current_transform(self) -> ArtworkTransform:
+        return ArtworkTransform(
             x_mm=self._x_spin.value(),
             y_mm=self._y_spin.value(),
             scale=self._scale,
+            orientation=self._orientation,
         )
-        self.transform_changed.emit(transform)
+
+    def _emit_current_transform(self) -> None:
+        if self._blocking:
+            return
+        self.transform_changed.emit(self._current_transform())
 
     # ---------------------------------------------------------------- slots
+    def _on_orientation_toggled(self, orientation: ArtworkOrientation, checked: bool) -> None:
+        if not checked or orientation is self._orientation:
+            return
+        self._orientation = orientation
+        self._refresh_position_slider_ranges()
+        self._refresh_orientation_note()
+        self._emit_current_transform()
+
     def _on_margin_slider_changed(self, spin: QDoubleSpinBox, value: int) -> None:
         if self._blocking:
             return
@@ -610,6 +709,7 @@ class ArtworkTransformControls(QWidget):
         self._refresh_position_slider_ranges()
         self._refresh_margin_sliders()
         self._refresh_diagram()
+        self._refresh_orientation_note()
         self.margins_changed.emit(self.print_margins())
 
     def _on_margins_link_toggled(self, checked: bool) -> None:
@@ -681,13 +781,8 @@ class ArtworkTransformControls(QWidget):
     def _apply_scale_percent(self, percent: float) -> None:
         if self._blocking:
             return
-        current = ArtworkTransform(
-            x_mm=self._x_spin.value(),
-            y_mm=self._y_spin.value(),
-            scale=self._scale,
-        )
         try:
-            scaled = transform_from_scale_percent(current, percent)
+            scaled = transform_from_scale_percent(self._current_transform(), percent)
         except ValueError:
             return
         self._scale = scaled.scale
