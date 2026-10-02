@@ -105,10 +105,20 @@ class PreviewWorkspace(QWidget):
 
         # Floating tools (children of the canvas, positioned on resize)
         self.tools = _Overlay(self.canvas_page, vertical=True)
-        self.pan_button = make_tool_button("✋", "Hand tool: drag to pan the view", self.tools)
-        self.pan_button.setCheckable(True)
-        self.pan_button.toggled.connect(self.preview.set_pan_tool_active)
-        self.tools.body.addWidget(self.pan_button)
+        # ✥ = move the drawing inside the printable area (Transform X/Y), not the view.
+        # View panning is navigation-only: middle-drag or wheel when zoomed in.
+        self.move_button = make_tool_button(
+            "✥",
+            "Move tool: drag to move the drawing in the printable area (Transform X/Y).\n"
+            "Pan the view with the middle mouse button or the wheel when zoomed in.",
+            self.tools,
+        )
+        self.move_button.setCheckable(True)
+        self.move_button.setChecked(self.preview.move_tool_active)
+        self.move_button.toggled.connect(self.preview.set_move_tool_active)
+        self.move_button.setEnabled(self.preview.transform_controls_enabled)
+        self.preview.transform_controls_enabled_changed.connect(self.move_button.setEnabled)
+        self.tools.body.addWidget(self.move_button)
         self.zoom_in_button = make_tool_button("＋", "Zoom in (⌘+)", self.tools)
         self.zoom_in_button.clicked.connect(self.preview.zoom_in)
         self.tools.body.addWidget(self.zoom_in_button)

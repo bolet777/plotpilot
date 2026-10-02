@@ -6,8 +6,8 @@ from pathlib import Path
 from xml.etree.ElementTree import Element
 
 import pytest
-from PySide6.QtCore import QPointF, QRect, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QPointF, QRect, Qt, QThreadPool
+from PySide6.QtGui import QFont, QMouseEvent
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from plotpilot.models.artwork_transform import ArtworkTransform
@@ -26,6 +26,7 @@ from plotpilot.ui.preview_widget import (
     clamp_view_zoom,
     ruler_step_mm,
 )
+from plotpilot.ui.preview_workspace import PreviewWorkspace
 from plotpilot.ui.properties_panel import TAB_DEVICE
 from plotpilot.ui.theme import apply_theme, build_stylesheet, scaled_font
 from plotpilot.ui.top_bar import connection_color, connection_label
@@ -241,6 +242,133 @@ def test_rulers_can_be_hidden_and_change_available_rect(qapp) -> None:
     assert without.height() > with_rulers.height()
 
 
+# ---------------------------------------------------- move tool vs view pan
+
+
+def _mouse(kind: QMouseEvent.Type, pos: QPointF, button: Qt.MouseButton) -> QMouseEvent:
+    return QMouseEvent(kind, pos, button, button, Qt.KeyboardModifier.NoModifier)
+
+
+def _drag(widget: LayerPreviewWidget, button: Qt.MouseButton, start: QPointF, end: QPointF) -> None:
+    widget.mousePressEvent(_mouse(QMouseEvent.Type.MouseButtonPress, start, button))
+    widget.mouseMoveEvent(_mouse(QMouseEvent.Type.MouseMove, end, button))
+    widget.mouseReleaseEvent(_mouse(QMouseEvent.Type.MouseButtonRelease, end, button))
+
+
+def test_move_tool_is_on_by_default(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    assert widget.move_tool_active is True
+    assert widget.cursor().shape() == Qt.CursorShape.SizeAllCursor
+
+
+def test_move_tool_drag_moves_artwork_not_the_view(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    layout = widget.physical_layout
+    assert layout is not None
+    emitted: list[ArtworkTransform] = []
+    widget.artwork_transform_changed.connect(emitted.append)
+    widget.set_move_tool_active(True)
+
+    _drag(widget, Qt.MouseButton.LeftButton, QPointF(300.0, 200.0), QPointF(340.0, 170.0))
+
+    moved = widget.artwork_transform
+    assert moved.x_mm == pytest.approx(40.0 / layout.mm_to_px)
+    assert moved.y_mm == pytest.approx(-30.0 / layout.mm_to_px)
+    assert emitted and emitted[-1] == moved
+    # The gesture must not leave a residual view pan: layout origin is unchanged.
+    assert widget.view_pan_px.isNull()
+    after = widget.physical_layout
+    assert after is not None
+    assert after.workspace_x_px == pytest.approx(layout.workspace_x_px)
+    assert after.workspace_y_px == pytest.approx(layout.workspace_y_px)
+    assert widget.view_zoom == 1.0
+
+
+def test_move_tool_drag_uses_zoomed_scale(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    widget.set_view_zoom(2.0)
+    zoomed = widget.physical_layout
+    assert zoomed is not None
+    pan_before = widget.view_pan_px
+
+    _drag(widget, Qt.MouseButton.LeftButton, QPointF(300.0, 200.0), QPointF(350.0, 200.0))
+
+    # 50 px at 2x zoom is half the mm of 50 px at fit: the drawing follows the cursor.
+    assert widget.artwork_transform.x_mm == pytest.approx(50.0 / zoomed.mm_to_px)
+    assert widget.artwork_transform.y_mm == pytest.approx(0.0)
+    assert widget.view_pan_px == pan_before
+
+
+def test_move_tool_off_makes_left_drag_inert(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    widget.set_move_tool_active(False)
+    assert widget.cursor().shape() != Qt.CursorShape.SizeAllCursor
+    emitted: list[ArtworkTransform] = []
+    widget.artwork_transform_changed.connect(emitted.append)
+
+    _drag(widget, Qt.MouseButton.LeftButton, QPointF(300.0, 200.0), QPointF(340.0, 170.0))
+
+    assert widget.artwork_transform == ArtworkTransform.identity()
+    assert emitted == []
+    assert widget.view_pan_px.isNull()
+
+
+def test_move_tool_has_no_effect_while_transform_locked(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    states: list[bool] = []
+    widget.transform_controls_enabled_changed.connect(states.append)
+    widget.set_transform_controls_enabled(False)
+    assert states == [False]
+    assert widget.cursor().shape() != Qt.CursorShape.SizeAllCursor
+
+    _drag(widget, Qt.MouseButton.LeftButton, QPointF(300.0, 200.0), QPointF(340.0, 170.0))
+
+    assert widget.artwork_transform == ArtworkTransform.identity()
+    widget.set_transform_controls_enabled(True)
+    assert states == [False, True]
+    _drag(widget, Qt.MouseButton.LeftButton, QPointF(300.0, 200.0), QPointF(340.0, 200.0))
+    assert widget.artwork_transform.x_mm > 0.0
+
+
+def test_middle_drag_pans_the_view_only(qapp) -> None:
+    widget = _preview_with_layout(qapp)
+    base = widget.physical_layout
+    assert base is not None
+    widget.set_artwork_transform(ArtworkTransform(x_mm=5.0, y_mm=7.0))
+
+    _drag(widget, Qt.MouseButton.MiddleButton, QPointF(300.0, 200.0), QPointF(325.0, 190.0))
+
+    assert widget.artwork_transform == ArtworkTransform(x_mm=5.0, y_mm=7.0)
+    assert widget.view_pan_px == QPointF(25.0, -10.0)
+    panned = widget.physical_layout
+    assert panned is not None
+    assert panned.workspace_x_px == pytest.approx(base.workspace_x_px + 25.0)
+    assert panned.workspace_y_px == pytest.approx(base.workspace_y_px - 10.0)
+    widget.fit_view()
+    assert widget.view_pan_px.isNull()
+    assert widget.artwork_transform == ArtworkTransform(x_mm=5.0, y_mm=7.0)
+
+
+def test_workspace_hand_button_drives_move_tool_and_follows_lock(qapp) -> None:
+    workspace = PreviewWorkspace()
+    button = workspace.move_button
+    tooltip = button.toolTip().lower()
+    assert "move" in tooltip and "drawing" in tooltip
+    assert "pan the view" not in tooltip.split("\n")[0]
+    assert button.isCheckable() and button.isChecked()
+    assert workspace.preview.move_tool_active is True
+
+    button.setChecked(False)
+    assert workspace.preview.move_tool_active is False
+    button.setChecked(True)
+    assert workspace.preview.move_tool_active is True
+
+    workspace.preview.set_transform_controls_enabled(False)
+    assert not button.isEnabled()
+    workspace.preview.set_transform_controls_enabled(True)
+    assert button.isEnabled()
+
+
 # ------------------------------------------------------------- main window
 
 
@@ -323,6 +451,57 @@ def test_pen_change_banner_hidden_when_idle(qapp) -> None:
     assert window._action_bar.pen_change_banner.isHidden()
     assert window._multi_continue_button.isHidden()
     assert window._action_bar.progress_row.isHidden()
+    window.close()
+
+
+def test_hand_drag_syncs_transform_panel_and_marks_dirty(qapp, tmp_path: Path) -> None:
+    svg_path = tmp_path / "a4.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="297mm" '
+        'viewBox="0 0 210 297"><path d="M10 10 L100 100" stroke="#000" fill="none"/></svg>',
+        encoding="utf-8",
+    )
+    window = _window()
+    window.resize(1240, 800)
+    window.show()
+    qapp.processEvents()
+    window.set_document(load_svg_from_path(svg_path))
+    window._refresh_preview_work_area()
+    assert QThreadPool.globalInstance().waitForDone(5000)
+    qapp.processEvents()
+    preview = window._preview
+    layout = preview.physical_layout
+    assert layout is not None
+    assert preview.move_tool_active is True
+    assert window.project_dirty is False
+    controls = window._artwork_controls
+    x_before = controls._x_spin.value()  # noqa: SLF001
+    y_before = controls._y_spin.value()  # noqa: SLF001
+
+    center = QPointF(preview.rect().center())
+    _drag(preview, Qt.MouseButton.LeftButton, center, center + QPointF(60.0, -20.0))
+    qapp.processEvents()
+
+    assert preview.view_pan_px.isNull()
+    assert preview.view_zoom == 1.0
+    assert controls._x_spin.value() == pytest.approx(  # noqa: SLF001
+        x_before + 60.0 / layout.mm_to_px, abs=0.05
+    )
+    assert controls._y_spin.value() == pytest.approx(  # noqa: SLF001
+        y_before - 20.0 / layout.mm_to_px, abs=0.05
+    )
+    assert window.project_dirty is True
+    window.close()
+
+
+def test_hand_button_disabled_while_transform_locked(qapp) -> None:
+    window = _window()
+    button = window._workspace.move_button
+    assert button.isEnabled()
+    window._preview.set_transform_controls_enabled(False)
+    assert not button.isEnabled()
+    window._preview.set_transform_controls_enabled(True)
+    assert button.isEnabled()
     window.close()
 
 

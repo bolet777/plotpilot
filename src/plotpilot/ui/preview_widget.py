@@ -3,6 +3,18 @@
 V2 adds a dark canvas, mm rulers, view zoom/pan, and a cursor readout. All of
 those are presentation only: the mm-space layout, the clipped geometry, and
 the drag-to-move artwork transform are unchanged from V1.
+
+Mouse model:
+
+* **Move tool (hand, on by default)** — left-drag moves the drawing inside the
+  printable area, i.e. edits ``ArtworkTransform.x_mm / y_mm`` exactly like the
+  Transform panel sliders. Deltas are converted with the *zoomed* ``mm_to_px``
+  so the drawing follows the cursor at any zoom. When the move tool is off a
+  left-drag does nothing (no accidental nudges while inspecting). It is also
+  inert while transform controls are locked (plotting).
+* **View pan (navigation only)** — middle-drag, and plain wheel scrolling when
+  the view is not at "fit". Never touches the artwork transform; ``fit_view``
+  resets it together with the zoom.
 """
 
 from __future__ import annotations
@@ -171,6 +183,7 @@ class LayerPreviewWidget(QWidget):
     artwork_transform_changed = Signal(object)
     view_changed = Signal()
     cursor_mm_changed = Signal(object)
+    transform_controls_enabled_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -192,7 +205,8 @@ class LayerPreviewWidget(QWidget):
         self._drag_last_px: QPointF | None = None
         self._panning = False
         self._pan_last_px: QPointF | None = None
-        self._pan_tool = False
+        # Hand/move tool: on by default so a plain left-drag moves the drawing (V1).
+        self._move_tool = True
         self._view_zoom = 1.0
         self._view_pan_px = QPointF(0.0, 0.0)
         self._show_rulers = True
@@ -250,6 +264,7 @@ class LayerPreviewWidget(QWidget):
         self._plot_pixmap_key = None
         self._clip_pending = False
         self._reset_context_polylines()
+        self._update_cursor()
         self.update()
 
     def _reset_context_polylines(self) -> None:
@@ -303,12 +318,14 @@ class LayerPreviewWidget(QWidget):
             self._context_renderer = QSvgRenderer(self)
             self._message = "Preview unavailable for this layer."
             self._physical = None
+            self._update_cursor()
             self.update()
             return False
 
         self._context_renderer = renderer
         if self._prepared_svg is None and self._prepared_error is None:
             self._message = None
+        self._update_cursor()
         self.update()
         return True
 
@@ -341,6 +358,7 @@ class LayerPreviewWidget(QWidget):
             self._message = None
         elif error_message:
             self._message = error_message
+        self._update_cursor()
         self.update()
 
     def set_clipped_plot(
@@ -364,6 +382,7 @@ class LayerPreviewWidget(QWidget):
             self._message = None
         elif error_message:
             self._message = error_message
+        self._update_cursor()
         self.update()
 
     def clear_clipped_plot(self) -> None:
@@ -416,11 +435,20 @@ class LayerPreviewWidget(QWidget):
             self.effective_rotation_degrees,
         )
 
+    @property
+    def transform_controls_enabled(self) -> bool:
+        return self._transform_controls_enabled
+
     def set_transform_controls_enabled(self, enabled: bool) -> None:
+        """Lock/unlock artwork moves (mirrors the Transform panel; locked while plotting)."""
+        changed = enabled != self._transform_controls_enabled
         self._transform_controls_enabled = enabled
         if not enabled:
             self._dragging = False
             self._drag_last_px = None
+        self._update_cursor()
+        if changed:
+            self.transform_controls_enabled_changed.emit(enabled)
 
     @property
     def printable_area(self) -> PrintableArea | None:
@@ -450,7 +478,21 @@ class LayerPreviewWidget(QWidget):
                 work_area=work_area,
                 printable_area=printable_area,
             )
+        self._update_cursor()
         self.update()
+
+    # ---------------------------------------------------------------- move tool
+    @property
+    def move_tool_active(self) -> bool:
+        """True when a left-drag moves the drawing (edits ``x_mm`` / ``y_mm``)."""
+        return self._move_tool
+
+    def set_move_tool_active(self, active: bool) -> None:
+        self._move_tool = active
+        if not active:
+            self._dragging = False
+            self._drag_last_px = None
+        self._update_cursor()
 
     # ---------------------------------------------------------------- view API
     @property
@@ -459,12 +501,9 @@ class LayerPreviewWidget(QWidget):
         return self._view_zoom
 
     @property
-    def pan_tool_active(self) -> bool:
-        return self._pan_tool
-
-    def set_pan_tool_active(self, active: bool) -> None:
-        self._pan_tool = active
-        self._update_cursor()
+    def view_pan_px(self) -> QPointF:
+        """Navigation-only view offset (middle-drag / wheel). Never affects plotting."""
+        return QPointF(self._view_pan_px)
 
     def set_rulers_visible(self, visible: bool) -> None:
         self._show_rulers = visible
@@ -799,29 +838,32 @@ class LayerPreviewWidget(QWidget):
     # ----------------------------------------------------------------- mouse
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         layout = self._current_physical_layout()
-        wants_pan = event.button() == Qt.MouseButton.MiddleButton or (
-            event.button() == Qt.MouseButton.LeftButton and self._pan_tool
-        )
-        if wants_pan and layout is not None:
+        if layout is None:
+            super().mousePressEvent(event)
+            return
+        # Middle button: navigation-only view pan (power-user affordance).
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_last_px = event.position()
             self._update_cursor()
             event.accept()
             return
-        if (
-            not self._transform_controls_enabled
-            or self._message is not None
-            or event.button() != Qt.MouseButton.LeftButton
-        ):
-            super().mousePressEvent(event)
-            return
-        if layout is None:
+        # Left button with the move tool: drag the drawing (ArtworkTransform x/y).
+        if event.button() != Qt.MouseButton.LeftButton or not self._can_move_artwork():
             super().mousePressEvent(event)
             return
         self._dragging = True
         self._drag_last_px = event.position()
         self._update_cursor()
         event.accept()
+
+    def _can_move_artwork(self) -> bool:
+        return (
+            self._move_tool
+            and self._transform_controls_enabled
+            and self._message is None
+            and self._physical is not None
+        )
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self.cursor_mm_changed.emit(self.widget_to_mm(event.position()))
@@ -890,11 +932,10 @@ class LayerPreviewWidget(QWidget):
         event.accept()
 
     def _update_cursor(self) -> None:
+        """Cursor affordance: hand = view pan (middle button), 4-way arrow = move drawing."""
         if self._panning:
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif self._pan_tool:
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
-        elif self._dragging:
+        elif self._dragging or self._can_move_artwork():
             self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.unsetCursor()
