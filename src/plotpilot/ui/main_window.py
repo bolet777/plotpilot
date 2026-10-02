@@ -1195,6 +1195,9 @@ class MainWindow(QMainWindow):
             return
         if self._preview.last_svg is None:
             return
+        # The ghost already follows the live transform; hide the stale clipped ink
+        # until the asynchronous clip catches up so two copies are never shown.
+        self._preview.set_clip_pending()
         self._preview_prep_timer.start()
 
     def _refresh_prepared_preview(self) -> None:
@@ -1259,6 +1262,10 @@ class MainWindow(QMainWindow):
                 result.fresh_geometry,
             )
         self._geometry_cache.clip_count += 1
+        geometry = result.fresh_geometry or self._geometry_cache.lookup(
+            result.document_id, result.layer_id
+        )
+        self._preview.set_context_polylines(geometry.polylines if geometry is not None else None)
         if result.page_width_mm > 0 and result.page_height_mm > 0 and result.work_area is not None:
             self._preview.set_work_area_overlay(
                 svg_width_mm=result.page_width_mm,

@@ -113,6 +113,17 @@ def _polygons_from_polylines(
     return polygons
 
 
+def _polylines_bounds(
+    polylines: tuple[tuple[tuple[float, float], ...], ...],
+) -> QRectF | None:
+    """Axis-aligned bounds (document mm) of all polyline points, or None if empty."""
+    xs = [x for subpath in polylines for x, _ in subpath]
+    ys = [y for subpath in polylines for _, y in subpath]
+    if not xs or not ys:
+        return None
+    return QRectF(QPointF(min(xs), min(ys)), QPointF(max(xs), max(ys)))
+
+
 @dataclass(slots=True)
 class _PhysicalPreviewState:
     svg_width_mm: float
@@ -127,6 +138,9 @@ class LayerPreviewWidget(QWidget):
     _PREVIEW_MARGIN_PX = 16.0
     _INFO_PAD = 6.0
     RULER_PX = 22.0
+    _GHOST_OPACITY = 0.18
+    _GHOST_OPACITY_PENDING = 0.45
+    _CONTEXT_PIXMAP_MAX_PX = 8192
     artwork_transform_changed = Signal(object)
     view_changed = Signal()
     cursor_mm_changed = Signal(object)
@@ -159,6 +173,17 @@ class LayerPreviewWidget(QWidget):
         self._clipped_polygons: list[QPolygonF] = []
         self._plot_pixmap: QPixmap | None = None
         self._plot_pixmap_key: tuple[int, int, int, int] | None = None
+        # Unplaced, unclipped document-mm polylines of the current layer. When present
+        # they replace the QSvgRenderer "ghost" so the context and the clipped ink come
+        # from the same flattened geometry (same viewBox / aspect-ratio mapping).
+        self._context_polylines: tuple[tuple[tuple[float, float], ...], ...] = ()
+        self._context_polygons: list[QPolygonF] = []
+        self._context_bounds_mm: QRectF | None = None
+        self._context_pixmap: QPixmap | None = None
+        self._context_pixmap_key: tuple[int, int, int] | None = None
+        # True between "a transform/clip refresh was scheduled" and the next
+        # set_clipped_plot(): the stale clipped ink is hidden meanwhile.
+        self._clip_pending = False
         self._painted_printable_boundary = False
 
     # ------------------------------------------------------------- content API
@@ -196,10 +221,55 @@ class LayerPreviewWidget(QWidget):
         self._clipped_polygons = []
         self._plot_pixmap = None
         self._plot_pixmap_key = None
+        self._clip_pending = False
+        self._reset_context_polylines()
         self.update()
+
+    def _reset_context_polylines(self) -> None:
+        self._context_polylines = ()
+        self._context_polygons = []
+        self._context_bounds_mm = None
+        self._context_pixmap = None
+        self._context_pixmap_key = None
+
+    def set_context_polylines(
+        self,
+        polylines: tuple[tuple[tuple[float, float], ...], ...] | None,
+    ) -> None:
+        """Provide the layer's flattened document-mm polylines for the context ghost.
+
+        Pass ``None``/empty to fall back to the source-SVG renderer.
+        """
+        self._reset_context_polylines()
+        if polylines:
+            self._context_polylines = polylines
+            self._context_polygons = _polygons_from_polylines(polylines)
+            self._context_bounds_mm = _polylines_bounds(polylines)
+        self.update()
+
+    @property
+    def context_polylines(self) -> tuple[tuple[tuple[float, float], ...], ...]:
+        return self._context_polylines
+
+    @property
+    def uses_geometry_context(self) -> bool:
+        """True when the ghost is painted from flattened geometry, not the source SVG."""
+        return bool(self._context_polygons) and self._context_bounds_mm is not None
+
+    def set_clip_pending(self) -> None:
+        """Hide stale clipped ink until the next ``set_clipped_plot``."""
+        if not self._clip_pending:
+            self._clip_pending = True
+            self.update()
+
+    @property
+    def clip_pending(self) -> bool:
+        return self._clip_pending
 
     def set_preview_svg(self, svg_text: str) -> bool:
         """Load source/context SVG; return False if Qt cannot render it."""
+        if svg_text != self._last_svg:
+            self._reset_context_polylines()
         self._last_svg = svg_text
         renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")), self)
         if not renderer.isValid():
@@ -229,6 +299,7 @@ class LayerPreviewWidget(QWidget):
         self._clipped_polygons = []
         self._plot_pixmap = None
         self._plot_pixmap_key = None
+        self._clip_pending = False
         self._prepared_svg = prepared_svg
         if prepared_svg:
             renderer = QSvgRenderer(QByteArray(prepared_svg.encode("utf-8")), self)
@@ -261,6 +332,7 @@ class LayerPreviewWidget(QWidget):
         self._clipped_polygons = _polygons_from_polylines(self._clipped_polylines)
         self._plot_pixmap = None
         self._plot_pixmap_key = None
+        self._clip_pending = False
         if self._context_renderer.isValid():
             self._message = None
         elif error_message:
@@ -529,9 +601,11 @@ class LayerPreviewWidget(QWidget):
         metrics = painter.fontMetrics()
         max_width = max(120.0, min(self.width() - 2 * (self._ruler_px() + 10) - 60, 480.0))
         line_height = metrics.height()
+        # +2 px slack: horizontalAdvance() rounds while elidedText() measures
+        # fractionally, so an exact fit can still elide the longest line.
         text_width = min(
             max_width,
-            max(metrics.horizontalAdvance(text) for text, _ in lines),
+            max(metrics.horizontalAdvance(text) for text, _ in lines) + 2.0,
         )
         pad = self._INFO_PAD
         box = QRectF(
@@ -792,20 +866,26 @@ class LayerPreviewWidget(QWidget):
                 painter.setBrush(QColor(COLORS.paper))
                 painter.drawRect(printable)
 
-        if self._context_renderer.isValid() and page_w_px > 0 and page_h_px > 0:
+        # Context ghost at the live transform. While a clip refresh is pending the
+        # ghost is the only artwork shown, so it is drawn a little stronger.
+        ghost_opacity = self._GHOST_OPACITY_PENDING if self._clip_pending else self._GHOST_OPACITY
+        if self.uses_geometry_context and work_w_px > 0 and work_h_px > 0:
+            self._paint_geometry_context(painter, transform, scale_px, work_target, ghost_opacity)
+        elif self._context_renderer.isValid() and page_w_px > 0 and page_h_px > 0:
             painter.save()
             painter.setClipRect(work_target)
             painter.translate(transform.x_mm * scale_px, transform.y_mm * scale_px)
             painter.scale(transform.scale, transform.scale)
-            painter.setOpacity(0.18)
+            painter.setOpacity(ghost_opacity)
             self._context_renderer.render(painter, page_target)
             painter.restore()
 
-        if self._clipped_polygons and work_w_px > 0 and work_h_px > 0:
+        show_ink = not self._clip_pending
+        if show_ink and self._clipped_polygons and work_w_px > 0 and work_h_px > 0:
             pixmap = self._plot_pixmap_for(work_w_px, work_h_px, scale_px)
             if pixmap is not None:
                 painter.drawPixmap(QPointF(0.0, 0.0), pixmap)
-        elif self._prepared_renderer.isValid() and work_w_px > 0 and work_h_px > 0:
+        elif show_ink and self._prepared_renderer.isValid() and work_w_px > 0 and work_h_px > 0:
             painter.save()
             painter.setClipRect(work_target)
             self._prepared_renderer.render(painter, work_target)
@@ -869,6 +949,75 @@ class LayerPreviewWidget(QWidget):
             painter.drawLine(QPointF(cx, cy), QPointF(cx + sx * arm, cy))
             painter.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * arm))
         self._painted_printable_boundary = True
+
+    def _paint_geometry_context(
+        self,
+        painter: QPainter,
+        transform: ArtworkTransform,
+        mm_to_px: float,
+        work_target: QRectF,
+        opacity: float,
+    ) -> None:
+        """Blit the cached ghost raster at the live transform (translation is free)."""
+        bounds = self._context_bounds_mm
+        if bounds is None or mm_to_px <= 0:
+            return
+        artwork_px = mm_to_px * transform.scale
+        painter.save()
+        painter.setClipRect(work_target)
+        painter.setOpacity(opacity)
+        origin = QPointF(
+            transform.x_mm * mm_to_px + bounds.x() * artwork_px,
+            transform.y_mm * mm_to_px + bounds.y() * artwork_px,
+        )
+        pixmap = self._context_pixmap_for(artwork_px)
+        if pixmap is not None:
+            painter.drawPixmap(origin, pixmap)
+        else:
+            # Too large to rasterize at this zoom: stroke directly.
+            painter.translate(transform.x_mm * mm_to_px, transform.y_mm * mm_to_px)
+            painter.scale(artwork_px, artwork_px)
+            self._stroke_polygons(painter, self._context_polygons, artwork_px)
+        painter.restore()
+
+    def _context_pixmap_for(self, artwork_px: float) -> QPixmap | None:
+        """Rasterize the unclipped artwork once per (scale, dpr); None if too large."""
+        bounds = self._context_bounds_mm
+        if bounds is None or artwork_px <= 0:
+            return None
+        dpr = self.devicePixelRatioF()
+        width_px = bounds.width() * artwork_px
+        height_px = bounds.height() * artwork_px
+        if max(width_px, height_px) * dpr > self._CONTEXT_PIXMAP_MAX_PX:
+            return None
+        key = (round(artwork_px * 1000), round(dpr * 100), id(self._context_polylines))
+        if self._context_pixmap is not None and self._context_pixmap_key == key:
+            return self._context_pixmap
+        pixmap = QPixmap(
+            max(1, int(math.ceil(width_px * dpr)) + 2),
+            max(1, int(math.ceil(height_px * dpr)) + 2),
+        )
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        ghost_painter = QPainter(pixmap)
+        ghost_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ghost_painter.scale(artwork_px, artwork_px)
+        ghost_painter.translate(-bounds.x(), -bounds.y())
+        self._stroke_polygons(ghost_painter, self._context_polygons, artwork_px)
+        ghost_painter.end()
+        self._context_pixmap = pixmap
+        self._context_pixmap_key = key
+        return pixmap
+
+    @staticmethod
+    def _stroke_polygons(painter: QPainter, polygons: list[QPolygonF], mm_to_px: float) -> None:
+        pen = QPen(QColor(COLORS.artwork_ink))
+        pen.setWidthF(max(0.2, 1.0 / mm_to_px))
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for polygon in polygons:
+            if polygon.size() >= 2:
+                painter.drawPolyline(polygon)
 
     def _plot_pixmap_for(
         self,
