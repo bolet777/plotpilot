@@ -73,6 +73,7 @@ class PropertiesPanel(QWidget):
         self.tabs.tabBar().setExpanding(True)
         self.tabs.tabBar().setDrawBase(False)
         self.tabs.setUsesScrollButtons(False)
+        self.tabs.tabBar().setElideMode(Qt.TextElideMode.ElideRight)
 
         self.transform_scroll = PanelScrollArea(transform, self.tabs)
         self.plot_settings_scroll = PanelScrollArea(plot_settings, self.tabs)

@@ -13,6 +13,8 @@ from dataclasses import dataclass, replace
 from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
+    QFontMetrics,
     QMouseEvent,
     QPainter,
     QPen,
@@ -123,6 +125,7 @@ class LayerPreviewWidget(QWidget):
     """Machine work area with prepared plot geometry and optional faint source context."""
 
     _PREVIEW_MARGIN_PX = 16.0
+    _INFO_PAD = 6.0
     RULER_PX = 22.0
     artwork_transform_changed = Signal(object)
     view_changed = Signal()
@@ -411,10 +414,34 @@ class LayerPreviewWidget(QWidget):
     def _ruler_px(self) -> float:
         return self.RULER_PX if self._show_rulers else 0.0
 
+    def _info_lines(self) -> list[tuple[str, QColor]]:
+        """Lines of the top-left info chip: work-area label plus preparation warnings."""
+        warnings = list(self._status_lines)
+        if not warnings and self._prepared_error:
+            warnings = [self._prepared_error]
+        lines: list[tuple[str, QColor]] = []
+        if self._physical is not None and self._physical.work_area.label:
+            lines.append((self._physical.work_area.label, QColor(COLORS.ruler_text)))
+        lines.extend((line, QColor(COLORS.warning)) for line in warnings)
+        return lines
+
+    def _info_font(self) -> QFont:
+        return scaled_font(self.font(), -1.0, minimum=8.0)
+
+    def _info_chip_height(self) -> float:
+        lines = self._info_lines()
+        if not lines:
+            return 0.0
+        return QFontMetrics(self._info_font()).height() * len(lines) + 2 * self._INFO_PAD
+
     def _available_rect(self) -> QRectF:
         margin = self._PREVIEW_MARGIN_PX
         ruler = self._ruler_px()
-        return QRectF(self.rect()).adjusted(margin + ruler, margin + ruler, -margin, -margin)
+        # Reserve room under the rulers for the info chip so it never covers the paper
+        # at the default (fit) zoom.
+        chip = self._info_chip_height()
+        top_inset = margin + ruler + (chip + 4.0 if chip else 0.0)
+        return QRectF(self.rect()).adjusted(margin + ruler, top_inset, -margin, -margin)
 
     def _base_layout(self) -> PhysicalPreviewLayout | None:
         if self._physical is None:
@@ -493,31 +520,23 @@ class LayerPreviewWidget(QWidget):
 
     def _paint_status_footer(self, painter: QPainter) -> None:
         """Top-left info chip: work-area label (muted) plus any preparation warnings."""
-        warnings = list(self._status_lines)
-        if not warnings and self._prepared_error:
-            warnings = [self._prepared_error]
-        label = self._physical.work_area.label if self._physical is not None else ""
-        if not warnings and not label:
+        lines = self._info_lines()
+        if not lines:
             return
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setFont(scaled_font(painter.font(), -1.0, minimum=8.0))
+        painter.setFont(self._info_font())
         metrics = painter.fontMetrics()
         max_width = max(120.0, min(self.width() - 2 * (self._ruler_px() + 10) - 60, 480.0))
-        lines: list[tuple[str, QColor]] = []
-        if label:
-            lines.append((label, QColor(COLORS.ruler_text)))
-        for line in warnings:
-            lines.append((line, QColor(COLORS.warning)))
         line_height = metrics.height()
         text_width = min(
             max_width,
             max(metrics.horizontalAdvance(text) for text, _ in lines),
         )
-        pad = 6
+        pad = self._INFO_PAD
         box = QRectF(
-            self._ruler_px() + 10,
-            self._ruler_px() + 10,
+            self._ruler_px() + self._PREVIEW_MARGIN_PX,
+            self._ruler_px() + 8.0,
             text_width + 2 * pad,
             line_height * len(lines) + 2 * pad,
         )

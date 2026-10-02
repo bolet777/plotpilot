@@ -186,6 +186,13 @@ class ArtworkTransformControls(QWidget):
         self._scale_spin.setSuffix(" %")
         self._scale_spin.setFixedWidth(72)
         self._scale_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+        # Show the identity scale before any document is loaded (instead of the range minimum).
+        self._blocking = True
+        try:
+            self._scale_spin.setValue(100.0)
+            self._scale_slider.setValue(percent_to_scale_slider(100.0))
+        finally:
+            self._blocking = False
         self._scale_spin.valueChanged.connect(self._on_scale_spin_changed)
         scale_row.addWidget(self._scale_spin)
         scale_layout.addLayout(scale_row)

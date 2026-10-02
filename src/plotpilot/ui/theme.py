@@ -63,14 +63,17 @@ CONTROL_HEIGHT = 24
 def build_stylesheet(c: ThemeColors = COLORS) -> str:
     """Return the application-wide Qt stylesheet."""
     return f"""
+    /* Plain containers inherit the palette window colour; only regions and
+       controls paint explicit backgrounds. Avoid `X QWidget {{ transparent }}`
+       descendant rules: their ID specificity would override role-based button
+       styles such as QPushButton[role="accent"]. */
     QWidget {{
-        background-color: {c.window};
         color: {c.text};
         font-size: 12px;
         selection-background-color: {c.selection};
         selection-color: #ffffff;
     }}
-    QMainWindow, QDialog {{
+    QMainWindow, QDialog, #mainContent {{
         background-color: {c.window};
     }}
     QToolTip {{
@@ -100,23 +103,18 @@ def build_stylesheet(c: ThemeColors = COLORS) -> str:
         background-color: {c.panel};
         border-bottom: 1px solid {c.border_subtle};
     }}
-    #topBar QWidget {{ background-color: transparent; }}
     #layersPanel, #propertiesPanel {{
         background-color: {c.panel};
     }}
-    #layersPanel QWidget, #propertiesPanel QWidget {{ background-color: transparent; }}
     #layersPanel {{ border-right: 1px solid {c.border_subtle}; }}
     #propertiesPanel {{ border-left: 1px solid {c.border_subtle}; }}
     #actionBar {{
         background-color: {c.panel};
         border-top: 1px solid {c.border_subtle};
     }}
-    #actionBar QWidget {{ background-color: transparent; }}
     #actionBar QPushButton {{ padding: 3px 9px; }}
-    #previewWorkspace {{ background-color: {c.canvas}; }}
-    #previewWorkspace > QWidget {{ background-color: transparent; }}
-    #previewEmptyPage {{ background-color: {c.canvas}; }}
-    #previewEmptyPage QWidget {{ background-color: transparent; }}
+    #previewWorkspace, #previewEmptyPage {{ background-color: {c.canvas}; }}
+    QStackedWidget, QTabWidget::pane {{ background: transparent; border: none; }}
 
     QSplitter::handle {{
         background-color: {c.border_subtle};
@@ -131,20 +129,16 @@ def build_stylesheet(c: ThemeColors = COLORS) -> str:
         border: 1px solid {c.border_subtle};
         border-radius: {RADIUS + 2}px;
     }}
-    QFrame[role="card"] > QWidget {{ background-color: transparent; }}
-    QFrame[role="card"] QWidget {{ background-color: transparent; }}
     QFrame[role="banner"] {{
         background-color: {c.accent_soft};
         border: 1px solid {c.accent};
         border-radius: {RADIUS}px;
     }}
-    QFrame[role="banner"] QWidget {{ background-color: transparent; }}
     QFrame[role="info"] {{
         background-color: {c.input};
         border: 1px solid {c.border_subtle};
         border-radius: {RADIUS}px;
     }}
-    QFrame[role="info"] QWidget {{ background-color: transparent; }}
     QFrame[role="separator"] {{
         background-color: {c.border_subtle};
         max-height: 1px;
@@ -277,7 +271,7 @@ def build_stylesheet(c: ThemeColors = COLORS) -> str:
         color: {c.text_secondary};
         border: 1px solid transparent;
         border-radius: {RADIUS}px;
-        padding: 5px 14px;
+        padding: 5px 8px;
         margin: 0px 2px 0px 0px;
         min-height: 18px;
     }}

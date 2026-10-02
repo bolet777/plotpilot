@@ -108,7 +108,7 @@ class ActionBar(QWidget):
         plotter_row.setSpacing(8)
         self.connection_dot = ConnectionDot(plotter_group, diameter=8)
         plotter_row.addWidget(self.connection_dot)
-        self.plotter_status_label = QLabel("○ Not connected", plotter_group)
+        self.plotter_status_label = QLabel("Not connected", plotter_group)
         self.plotter_status_label.setProperty("role", "status-error")
         plotter_row.addWidget(self.plotter_status_label)
         self.connect_button = QPushButton("Connect", plotter_group)
@@ -188,13 +188,13 @@ class ActionBar(QWidget):
         self.connection_dot.set_state(state)
         label = connection_label(state)
         if state is PlotterConnectionState.CONNECTED:
-            self.plotter_status_label.setText(f"● {label}")
+            self.plotter_status_label.setText(label)
             role = "status-ok"
         elif state is PlotterConnectionState.ERROR:
-            self.plotter_status_label.setText(f"● {label}")
+            self.plotter_status_label.setText(label)
             role = "status-error"
         else:
-            self.plotter_status_label.setText(f"○ {label}")
+            self.plotter_status_label.setText(label)
             role = "status-error"
         self.plotter_status_label.setProperty("role", role)
         style = self.plotter_status_label.style()
