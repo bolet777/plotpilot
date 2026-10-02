@@ -15,6 +15,7 @@ the hooks used by the stylesheet:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import resources
 
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
@@ -60,8 +61,21 @@ RADIUS = 6
 CONTROL_HEIGHT = 24
 
 
+def check_mark_url() -> str:
+    """Stylesheet ``url(...)`` for the bundled check-mark SVG (empty if missing).
+
+    Qt ships no ``:/qt-project.org/...`` checkbox images in PySide6, so the
+    indicator glyph is a packaged file. Quoted for paths that contain spaces.
+    """
+    path = resources.files("plotpilot.resources.icons").joinpath("check.svg")
+    if not path.is_file():
+        return ""
+    return f'image: url("{str(path).replace(chr(92), "/")}");'
+
+
 def build_stylesheet(c: ThemeColors = COLORS) -> str:
     """Return the application-wide Qt stylesheet."""
+    check_image = check_mark_url()
     return f"""
     /* Plain containers inherit the palette window colour; only regions and
        controls paint explicit backgrounds. Avoid `X QWidget {{ transparent }}`
@@ -367,22 +381,36 @@ def build_stylesheet(c: ThemeColors = COLORS) -> str:
         background-color: {c.input};
     }}
     QCheckBox::indicator {{ border-radius: 3px; }}
-    QRadioButton::indicator {{ border-radius: 8px; }}
+    QRadioButton::indicator {{ border-radius: 7px; }}
     QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {c.accent}; }}
     QCheckBox::indicator:checked {{
         background-color: {c.accent};
         border-color: {c.accent};
-        image: url(:/qt-project.org/styles/commonstyle/images/checkbox-checked-16.png);
+        {check_image}
     }}
+    QCheckBox::indicator:checked:disabled {{ background-color: #4a5a75; }}
+    /* Filled accent disc with a light centre dot. A thick border would be drawn
+       as a rounded square by the stylesheet engine, so the dot is a gradient. */
     QRadioButton::indicator:checked {{
-        background-color: {c.input};
-        border: 4px solid {c.accent};
+        border-color: {c.accent};
+        background-color: qradialgradient(
+            cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+            stop: 0 #ffffff, stop: 0.38 #ffffff,
+            stop: 0.5 {c.accent}, stop: 1 {c.accent}
+        );
     }}
     QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
         border-color: {c.border_subtle};
         background-color: #202022;
     }}
-    QRadioButton::indicator:checked:disabled {{ border: 4px solid #4a5a75; }}
+    QRadioButton::indicator:checked:disabled {{
+        border-color: #4a5a75;
+        background-color: qradialgradient(
+            cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+            stop: 0 #9aa3b5, stop: 0.38 #9aa3b5,
+            stop: 0.5 #4a5a75, stop: 1 #4a5a75
+        );
+    }}
 
     /* ---- Sliders -------------------------------------------------------- */
     QSlider {{ background: transparent; min-height: 20px; }}

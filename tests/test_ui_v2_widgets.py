@@ -53,6 +53,19 @@ def test_stylesheet_builds_and_applies(qapp) -> None:
         qapp.setStyleSheet(previous)
 
 
+def test_stylesheet_uses_bundled_check_mark() -> None:
+    from plotpilot.ui.theme import build_stylesheet, check_mark_url
+
+    url = check_mark_url()
+    assert url.startswith('image: url("') and url.endswith('check.svg");')
+    sheet = build_stylesheet()
+    assert url in sheet
+    # The old Qt-internal resource path does not exist in PySide6.
+    assert ":/qt-project.org/" not in sheet
+    # Radio indicators must not rely on a thick border (rendered as a rounded square).
+    assert "border: 4px" not in sheet
+
+
 def test_scaled_font_handles_pixel_and_point_sizes() -> None:
     point = QFont()
     point.setPointSizeF(12.0)
