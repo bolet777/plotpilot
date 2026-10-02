@@ -89,6 +89,7 @@ from plotpilot.ui.plot_progress_labels import (
 )
 from plotpilot.ui.plot_settings_widget import PlotSettingsWidget
 from plotpilot.ui.preview_widget import LayerPreviewWidget
+from plotpilot.ui.transform_slider_mapping import ArtworkBoundsMm, artwork_bounds_from_polylines
 
 _PREFERRED_WINDOW_WIDTH = 900
 _PREFERRED_WINDOW_HEIGHT = 560
@@ -1351,6 +1352,7 @@ class MainWindow(QMainWindow):
             work_area.width_mm,
             work_area.height_mm,
         )
+        self._artwork_controls.set_artwork_bounds(self._current_artwork_bounds())
         if work_area.from_fallback:
             orientation = self._settings_service.preview_fallback_work_area_orientation
             plot_line = (
@@ -1368,6 +1370,20 @@ class MainWindow(QMainWindow):
         self._artwork_controls.set_plot_area_text(plot_line)
         self._artwork_controls.set_printable_text(self._printable_size_text(work_area))
         self._artwork_controls.set_status_lines(status_lines)
+
+    def _current_artwork_bounds(self) -> ArtworkBoundsMm:
+        """Unscaled document-mm extent of the selected layer, before placement."""
+        document = self._document
+        layer = self._current_layer()
+        if document is None or layer is None:
+            return ArtworkBoundsMm.origin_point()
+        geometry = self._geometry_cache.lookup(id(document), layer.layer_id)
+        if geometry is None:
+            return ArtworkBoundsMm.origin_point()
+        bounds = artwork_bounds_from_polylines(geometry.polylines)
+        if bounds is None:
+            return ArtworkBoundsMm.origin_point()
+        return bounds
 
     def _printable_size_text(self, work_area: object) -> str:
         width = getattr(work_area, "width_mm", None)

@@ -21,9 +21,11 @@ from plotpilot.models.artwork_transform import (
     scale_percent,
     transform_from_scale_percent,
 )
-from plotpilot.models.print_margins import PrintMargins
+from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.ui.transform_slider_mapping import (
     SCALE_PRESET_PERCENTS,
+    ArtworkBoundsMm,
+    axis_translation_limits,
     mm_to_position_slider,
     percent_to_scale_slider,
     position_slider_maximum,
@@ -56,8 +58,17 @@ class ArtworkTransformControls(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._x_range_mm = 300.0
-        self._y_range_mm = 217.9
+        self._work_width_mm = 300.0
+        self._work_height_mm = 217.9
+        self._artwork_bounds = ArtworkBoundsMm.origin_point()
+        self._x_min_mm = 0.0
+        self._x_max_mm = 0.0
+        self._y_min_mm = 0.0
+        self._y_max_mm = 0.0
+        self._x_slider_min_mm = 0.0
+        self._x_slider_max_mm = 0.0
+        self._y_slider_min_mm = 0.0
+        self._y_slider_max_mm = 0.0
         self._scale = 1.0
         self._blocking = False
 
@@ -148,7 +159,6 @@ class ArtworkTransformControls(QWidget):
 
         self._reset_x.clicked.connect(self._on_reset_x)
         self._reset_y.clicked.connect(self._on_reset_y)
-        self._refresh_position_slider_ranges()
         self._refresh_scale_presets()
         self.set_print_margins(PrintMargins())
 
@@ -187,11 +197,31 @@ class ArtworkTransformControls(QWidget):
         parent_layout.addLayout(row)
         return slider, spin, reset
 
-    def set_work_area_dimensions(self, width_mm: float, height_mm: float) -> None:
-        self._x_range_mm = width_mm
-        self._y_range_mm = height_mm
+    def set_artwork_bounds(self, bounds: ArtworkBoundsMm) -> None:
+        """Store unscaled document-mm artwork extent and recompute X/Y slider limits."""
+        self._artwork_bounds = bounds
         self._refresh_position_slider_ranges()
-        self._sync_sliders_from_values()
+
+    def set_work_area_dimensions(self, width_mm: float, height_mm: float) -> None:
+        self._work_width_mm = width_mm
+        self._work_height_mm = height_mm
+        self._refresh_position_slider_ranges()
+
+    def x_translation_limits(self) -> tuple[float, float]:
+        """Calculated X travel ``(min_mm, max_mm)``, before expanding for the current value."""
+        return self._x_min_mm, self._x_max_mm
+
+    def y_translation_limits(self) -> tuple[float, float]:
+        """Calculated Y travel ``(min_mm, max_mm)``, before expanding for the current value."""
+        return self._y_min_mm, self._y_max_mm
+
+    def x_slider_limits(self) -> tuple[float, float]:
+        """X slider span, widened when the current translation sits outside the travel range."""
+        return self._x_slider_min_mm, self._x_slider_max_mm
+
+    def y_slider_limits(self) -> tuple[float, float]:
+        """Y slider span, widened when the current translation sits outside the travel range."""
+        return self._y_slider_min_mm, self._y_slider_max_mm
 
     def set_plot_area_text(self, text: str) -> None:
         self._plot_area_label.setText(text)
@@ -210,6 +240,7 @@ class ArtworkTransformControls(QWidget):
         try:
             self._margin_horizontal.setValue(margins.horizontal_mm)
             self._margin_vertical.setValue(margins.vertical_mm)
+            self._refresh_position_slider_ranges()
         finally:
             self._blocking = False
 
@@ -225,6 +256,7 @@ class ArtworkTransformControls(QWidget):
             self._margin_horizontal.setMaximum(max(0.0, max_horizontal_mm))
             self._margin_vertical.setMaximum(max(0.0, max_vertical_mm))
             after = self.print_margins()
+            self._refresh_position_slider_ranges()
         finally:
             self._blocking = False
         if after != before:
@@ -245,6 +277,7 @@ class ArtworkTransformControls(QWidget):
     def _on_margin_spin_changed(self, _value: float) -> None:
         if self._blocking:
             return
+        self._refresh_position_slider_ranges()
         self.margins_changed.emit(self.print_margins())
 
     def set_status_lines(self, lines: list[str]) -> None:
@@ -257,28 +290,84 @@ class ArtworkTransformControls(QWidget):
             self._x_spin.setValue(transform.x_mm)
             self._y_spin.setValue(transform.y_mm)
             self._scale_spin.setValue(scale_percent(transform))
-            self._sync_sliders_from_values()
+            self._refresh_position_slider_ranges()
+            self._scale_slider.setValue(percent_to_scale_slider(self._scale_spin.value()))
             self._refresh_scale_presets()
         finally:
             self._blocking = False
 
     def _refresh_position_slider_ranges(self) -> None:
-        for slider, range_mm in (
-            (self._x_slider, self._x_range_mm),
-            (self._y_slider, self._y_range_mm),
-        ):
+        """Recompute X/Y travel from bounds, scale, and the printable area.
+
+        Does not change the spinbox values or emit ``transform_changed``.
+        """
+        if not self._recompute_translation_limits():
+            return
+        was_blocking = self._blocking
+        self._blocking = True
+        try:
+            self._apply_axis_slider("X")
+            self._apply_axis_slider("Y")
+        finally:
+            self._blocking = was_blocking
+
+    def _recompute_translation_limits(self) -> bool:
+        try:
+            area = printable_area_for(
+                self._work_width_mm,
+                self._work_height_mm,
+                self.print_margins(),
+            )
+            x_limits = axis_translation_limits(
+                artwork_min_mm=self._artwork_bounds.min_x_mm,
+                artwork_max_mm=self._artwork_bounds.max_x_mm,
+                scale=self._scale,
+                printable_min_mm=area.x_mm,
+                printable_max_mm=area.x_max_mm,
+            )
+            y_limits = axis_translation_limits(
+                artwork_min_mm=self._artwork_bounds.min_y_mm,
+                artwork_max_mm=self._artwork_bounds.max_y_mm,
+                scale=self._scale,
+                printable_min_mm=area.y_mm,
+                printable_max_mm=area.y_max_mm,
+            )
+        except (PrintMarginsError, ValueError):
+            return False
+        self._x_min_mm, self._x_max_mm = x_limits
+        self._y_min_mm, self._y_max_mm = y_limits
+        return True
+
+    def _apply_axis_slider(self, axis: str) -> None:
+        if axis == "X":
+            slider = self._x_slider
+            current = self._x_spin.value()
+            calc_min, calc_max = self._x_min_mm, self._x_max_mm
+        else:
+            slider = self._y_slider
+            current = self._y_spin.value()
+            calc_min, calc_max = self._y_min_mm, self._y_max_mm
+        shown_min = min(calc_min, current)
+        shown_max = max(calc_max, current)
+        if axis == "X":
+            self._x_slider_min_mm = shown_min
+            self._x_slider_max_mm = shown_max
+        else:
+            self._y_slider_min_mm = shown_min
+            self._y_slider_max_mm = shown_max
+        slider.blockSignals(True)
+        try:
             slider.setMinimum(0)
-            slider.setMaximum(position_slider_maximum(range_mm))
+            slider.setMaximum(position_slider_maximum(shown_min, shown_max))
+            slider.setValue(mm_to_position_slider(current, shown_min, shown_max))
+        finally:
+            slider.blockSignals(False)
 
     def _sync_sliders_from_values(self) -> None:
         self._blocking = True
         try:
-            self._x_slider.setValue(
-                mm_to_position_slider(self._x_spin.value(), self._x_range_mm),
-            )
-            self._y_slider.setValue(
-                mm_to_position_slider(self._y_spin.value(), self._y_range_mm),
-            )
+            self._apply_axis_slider("X")
+            self._apply_axis_slider("Y")
             self._scale_slider.setValue(percent_to_scale_slider(self._scale_spin.value()))
         finally:
             self._blocking = False
@@ -303,8 +392,11 @@ class ArtworkTransformControls(QWidget):
     def _on_position_slider_changed(self, axis: str, value: int) -> None:
         if self._blocking:
             return
-        range_mm = self._x_range_mm if axis == "X" else self._y_range_mm
-        mm = position_slider_to_mm(value, range_mm)
+        if axis == "X":
+            min_mm, max_mm = self._x_slider_min_mm, self._x_slider_max_mm
+        else:
+            min_mm, max_mm = self._y_slider_min_mm, self._y_slider_max_mm
+        mm = position_slider_to_mm(value, min_mm, max_mm)
         self._blocking = True
         try:
             if axis == "X":
@@ -364,6 +456,7 @@ class ArtworkTransformControls(QWidget):
         except ValueError:
             return
         self._scale = scaled.scale
+        self._refresh_position_slider_ranges()
         self._refresh_scale_presets()
         self._emit_current_transform()
 
@@ -371,7 +464,7 @@ class ArtworkTransformControls(QWidget):
         self._blocking = True
         try:
             self._x_spin.setValue(0.0)
-            self._x_slider.setValue(mm_to_position_slider(0.0, self._x_range_mm))
+            self._apply_axis_slider("X")
         finally:
             self._blocking = False
         self._emit_current_transform()
@@ -380,7 +473,7 @@ class ArtworkTransformControls(QWidget):
         self._blocking = True
         try:
             self._y_spin.setValue(0.0)
-            self._y_slider.setValue(mm_to_position_slider(0.0, self._y_range_mm))
+            self._apply_axis_slider("Y")
         finally:
             self._blocking = False
         self._emit_current_transform()
