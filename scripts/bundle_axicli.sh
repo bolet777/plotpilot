@@ -33,7 +33,7 @@ prefix="$(base_python_prefix)"
 resources="$APP/Contents/Resources"
 python_dest="$resources/python"
 site="$resources/axicli-site"
-wrapper="$APP/Contents/MacOS/axicli"
+wrapper="$APP/Contents/Resources/axicli"
 
 echo "Bundling axicli from $AXICLI_URL"
 echo "Python: $prefix"
@@ -43,14 +43,13 @@ ditto "$prefix" "$python_dest"
 
 cat > "$wrapper" <<'EOF'
 #!/bin/bash
-# Private axicli for this PlotPilot.app. Python and the AxiDraw packages live
-# under Contents/Resources and move with the app.
+# Private axicli for this PlotPilot.app. Kept out of Contents/MacOS so the
+# Developer ID signature can seal the bundle. A shell script there is rejected.
 set -euo pipefail
-MACOS="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$MACOS/.." && pwd)"
+RESOURCES="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONNOUSERSITE=1
-export PYTHONPATH="${ROOT}/Resources/axicli-site${PYTHONPATH:+:${PYTHONPATH}}"
-exec "${ROOT}/Resources/python/bin/python3.12" -m axicli "$@"
+export PYTHONPATH="${RESOURCES}/axicli-site${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${RESOURCES}/python/bin/python3.12" -m axicli "$@"
 EOF
 chmod 755 "$wrapper"
 xattr -cr "$python_dest" "$site" "$wrapper"

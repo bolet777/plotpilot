@@ -67,11 +67,13 @@ def test_missing_cli_is_error() -> None:
 
 
 def test_resolve_cli_prefers_bundled_copy_when_frozen(tmp_path: Path, monkeypatch) -> None:
-    macos = tmp_path / "MacOS"
-    macos.mkdir()
+    macos = tmp_path / "Contents" / "MacOS"
+    resources = tmp_path / "Contents" / "Resources"
+    macos.mkdir(parents=True)
+    resources.mkdir()
     exe = macos / "PlotPilot"
     exe.write_text("")
-    cli = macos / "axicli"
+    cli = resources / "axicli"
     cli.write_text("#!/bin/sh\n")
     cli.chmod(0o755)
     monkeypatch.setattr(sys, "frozen", True, raising=False)

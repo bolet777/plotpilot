@@ -41,14 +41,15 @@ _INSTALL_HINT = (
 
 
 def bundled_cli_path() -> Path | None:
-    """``axicli`` placed beside the executable by ``./publish.sh``.
+    """``axicli`` shipped in ``Contents/Resources`` by ``./publish.sh``.
 
     A Finder-launched app does not see Terminal's PATH. The release zip ships a
-    private copy so plot commands do not depend on a separate install.
+    private copy so plot commands do not depend on a separate install. The
+    wrapper stays out of ``Contents/MacOS`` so the bundle can be signed.
     """
     if not getattr(sys, "frozen", False):
         return None
-    candidate = Path(sys.executable).resolve().parent / "axicli"
+    candidate = Path(sys.executable).resolve().parent.parent / "Resources" / "axicli"
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return candidate
     return None

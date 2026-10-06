@@ -56,7 +56,7 @@ Connect the AxiDraw by USB before plotting.
 EOF
 fi
 
-if [[ -x "$APP/Contents/MacOS/axicli" ]]; then
+if [[ -x "$APP/Contents/Resources/axicli" ]]; then
   cat >> "$STAGE/README.txt" <<'EOF'
 
 axicli is included inside PlotPilot.app. It is the official AxiDraw software from
