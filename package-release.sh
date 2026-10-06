@@ -22,9 +22,12 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 APP="$ROOT/dist/PlotPilot.app"
 AXICLI_URL="${AXICLI_URL:-https://cdn.evilmadscientist.com/dl/ad/public/AxiDraw_API.zip}"
+ENTITLEMENTS="$ROOT/packaging/macos/entitlements.plist"
+NOTARY_PROFILE="${PLOTPILOT_NOTARY_PROFILE:-plotpilot-notary}"
 BUILD=1
 BUNDLE_AXICLI=1
 PUBLISH=1
+NOTARIZED=0
 
 usage() {
   cat <<'EOF'
@@ -175,10 +178,103 @@ if [[ "$BUNDLE_AXICLI" -eq 1 ]]; then
   bundle_axicli
 fi
 
-# Adding axicli invalidates the signature PyInstaller wrote. Ad-hoc sign the
-# bundle so macOS does not report it as damaged. This is not a Developer ID
-# signature: a downloaded zip still needs right-click → Open the first time.
-codesign --force --deep --sign - "$APP"
+developer_id_identity() {
+  security find-identity -v -p codesigning \
+    | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+    | head -1
+}
+
+notary_profile_ready() {
+  xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1
+}
+
+print_signing_setup() {
+  cat >&2 <<EOF
+Publishing a build other people can open needs two one-time steps.
+
+1. Create a Developer ID Application certificate (the Apple Development
+   certificate already in Keychain cannot notarize a public download):
+   Xcode → Settings → Accounts → your team → Manage Certificates →
+   + → Developer ID Application.
+
+2. Store notarization credentials. Create an app-specific password at
+   https://appleid.apple.com then run:
+
+   xcrun notarytool store-credentials ${NOTARY_PROFILE} \\
+     --apple-id YOUR_APPLE_ID_EMAIL \\
+     --team-id YOUR_TEAM_ID
+
+   YOUR_TEAM_ID is the 10-character id in parentheses on the certificate.
+
+Then run ./package-release.sh again.
+EOF
+}
+
+sign_macho() {
+  local file="$1"
+  if [[ "${2:-}" == "with-entitlements" ]]; then
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+      --entitlements "$ENTITLEMENTS" "$file"
+  else
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$file"
+  fi
+}
+
+sign_and_notarize() {
+  local upload list file
+  IDENTITY="$(developer_id_identity)"
+  if [[ -z "$IDENTITY" ]]; then
+    if [[ "$PUBLISH" -eq 1 ]]; then
+      print_signing_setup
+      exit 1
+    fi
+    echo "No Developer ID certificate. Ad-hoc signature only; a downloaded copy will be blocked."
+    codesign --force --deep --sign - "$APP"
+    return
+  fi
+  if ! notary_profile_ready; then
+    print_signing_setup
+    exit 1
+  fi
+
+  echo "Signing with $IDENTITY"
+  list="$(mktemp)"
+  find "$APP" -type f -print0 \
+    | while IFS= read -r -d '' file; do
+        if file -b "$file" | grep -q 'Mach-O'; then
+          printf '%s\n' "$file"
+        fi
+      done \
+    | awk '{ print length($0), $0 }' \
+    | sort -nr \
+    | cut -d' ' -f2- > "$list"
+  while IFS= read -r file; do
+    case "$file" in
+      */Contents/MacOS/PlotPilot|*/Contents/Resources/python/bin/python3.12)
+        sign_macho "$file" with-entitlements
+        ;;
+      *)
+        sign_macho "$file"
+        ;;
+    esac
+  done < "$list"
+  rm -f "$list"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+    --entitlements "$ENTITLEMENTS" "$APP"
+  codesign --verify --deep --strict "$APP"
+
+  upload="$ROOT/dist/PlotPilot-notarize.zip"
+  rm -f "$upload"
+  ditto -c -k --keepParent "$APP" "$upload"
+  echo "Submitting to Apple notarization..."
+  xcrun notarytool submit "$upload" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  rm -f "$upload"
+  NOTARIZED=1
+}
+
+sign_and_notarize
 
 NAME="PlotPilot-${VERSION}-macos-${ARCH}"
 STAGE="$ROOT/dist/release-staging/$NAME"
@@ -186,15 +282,38 @@ ZIP="$ROOT/dist/${NAME}.zip"
 rm -rf "$ROOT/dist/release-staging"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/PlotPilot.app"
-cat > "$STAGE/README.txt" <<EOF
+if [[ "$NOTARIZED" -eq 0 ]]; then
+cat > "$STAGE/Open PlotPilot.command" <<'EOF'
+#!/bin/bash
+# First launch after a browser download. macOS marks the app quarantined and
+# reports it as damaged; this removes that flag and opens PlotPilot.
+set -euo pipefail
+cd "$(dirname "$0")"
+xattr -dr com.apple.quarantine "PlotPilot.app" 2>/dev/null || true
+open "PlotPilot.app"
+EOF
+chmod 755 "$STAGE/Open PlotPilot.command"
+fi
+if [[ "$NOTARIZED" -eq 1 ]]; then
+  cat > "$STAGE/README.txt" <<EOF
 PlotPilot ${VERSION} for macOS (${ARCH})
 
-1. Unzip this folder.
-2. Right-click PlotPilot.app and choose Open, then confirm.
-   The first launch asks because the app is not signed with an Apple Developer ID.
-   After that, open it normally.
-3. Connect the AxiDraw by USB.
+Unzip this folder and open PlotPilot.app.
+Connect the AxiDraw by USB before plotting.
 EOF
+else
+  cat > "$STAGE/README.txt" <<EOF
+PlotPilot ${VERSION} for macOS (${ARCH})
+
+This build is not notarized. macOS will call a downloaded copy damaged.
+From this folder, in Terminal:
+
+  xattr -dr com.apple.quarantine PlotPilot.app
+  open PlotPilot.app
+
+Connect the AxiDraw by USB before plotting.
+EOF
+fi
 if [[ "$BUNDLE_AXICLI" -eq 1 ]]; then
   cat >> "$STAGE/README.txt" <<'EOF'
 

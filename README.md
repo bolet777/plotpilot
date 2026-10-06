@@ -27,7 +27,7 @@
 
 PlotPilot is a desktop controller for pen plotters. It opens an SVG, lists its layers, shows each layer on the machine’s page, and sends that same geometry to the AxiDraw through [`axicli`](https://axidraw.com/doc/cli_api/). The preview is the prepared plot: position, scale, rotation, margins, and clipping are applied before anything is drawn on screen or on paper.
 
-A downloadable Mac app is a zip of `PlotPilot.app`, built on your machine with `./package-release.sh`. It is not signed with an Apple Developer ID, so the first open is a right-click. The zip includes `axicli`, so the person who receives it does not install Python or the AxiDraw command-line tools.
+A downloadable Mac app is a zip of `PlotPilot.app`, built on your machine with `./package-release.sh`. With a Developer ID certificate and notarization, the recipient unzips and opens the app. The zip includes `axicli`, so they do not install Python or the AxiDraw command-line tools.
 
 ## What you can do
 
