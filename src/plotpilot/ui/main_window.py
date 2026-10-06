@@ -790,7 +790,9 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
-            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            fallback_work_area_orientation=(
+                self._settings_service.preview_fallback_work_area_orientation
+            ),
             print_margins=self._settings_service.print_margins,
         )
         if error:
@@ -826,7 +828,9 @@ class MainWindow(QMainWindow):
             plot_settings=self._settings_service.plot_settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
-            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            fallback_work_area_orientation=(
+                self._settings_service.preview_fallback_work_area_orientation
+            ),
             print_margins=self._settings_service.print_margins,
         )
         if error is not None:
@@ -866,7 +870,9 @@ class MainWindow(QMainWindow):
             settings=settings,
             artwork_transform=self._preview.artwork_transform,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
-            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            fallback_work_area_orientation=(
+                self._settings_service.preview_fallback_work_area_orientation
+            ),
             print_margins=self._settings_service.print_margins,
         )
         if error is not None:
@@ -1002,7 +1008,9 @@ class MainWindow(QMainWindow):
             artwork_transform=self._preview.artwork_transform,
             plot_settings=self._settings_service.plot_settings,
             fallback_work_area=self._settings_service.preview_fallback_work_area,
-            fallback_work_area_orientation=self._settings_service.preview_fallback_work_area_orientation,
+            fallback_work_area_orientation=(
+                self._settings_service.preview_fallback_work_area_orientation
+            ),
             print_margins=self._settings_service.print_margins,
         )
 

@@ -536,7 +536,9 @@ def test_margin_change_reuses_flattened_geometry(
 
     monkeypatch.setattr(layer_geometry, "flatten_document_geometry", wrapped)
     queued: list[object] = []
-    margin_window._preview_compute.submit = lambda operation: queued.append(operation) or 0  # type: ignore[method-assign]
+    margin_window._preview_compute.submit = lambda operation: (  # type: ignore[method-assign]
+        queued.append(operation) or 0
+    )
     margin_window.set_document(load_svg_from_path(FIXTURES / "square_100mm_path.svg"))
     margin_window._preview_prep_timer.stop()
     queued.clear()

@@ -442,7 +442,8 @@ def test_multi_layer_pen_change_suspends_presence(qapp) -> None:
     _wait_until(lambda: fake.detect_calls >= 1)
     document = _sample_document()
     layers = layers_for_document(document)
-    assert multi.start_job(document, layers, settings=plotter._snapshot_plot_settings()) is None  # noqa: SLF001
+    settings = plotter._snapshot_plot_settings()  # noqa: SLF001
+    assert multi.start_job(document, layers, settings=settings) is None
     _wait_until(
         lambda: multi.job.state is MultiLayerJobState.WAITING_FOR_PEN_CHANGE,
         timeout_ms=8000,

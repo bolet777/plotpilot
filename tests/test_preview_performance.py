@@ -372,7 +372,9 @@ def test_transform_refresh_does_not_flatten_on_the_caller(
 
     monkeypatch.setattr(layer_geometry, "flatten_document_geometry", wrapped)
     queued: list[object] = []
-    window._preview_compute.submit = lambda operation: queued.append(operation) or 0  # type: ignore[method-assign]
+    window._preview_compute.submit = lambda operation: (  # type: ignore[method-assign]
+        queued.append(operation) or 0
+    )
     window.set_document(load_svg_from_path(FIXTURES / "square_100mm_path.svg"))
     window._preview_prep_timer.stop()
     queued.clear()

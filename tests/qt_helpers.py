@@ -42,10 +42,11 @@ def wait_for_plot_phase(
 
 
 def wait_for_plot_started(service: PlotterService, *, timeout_ms: int = 3000) -> None:
-    wait_until(
-        lambda: service.plot_state.phase is PlotPhase.RUNNING or service._plot_in_flight,  # noqa: SLF001
-        timeout_ms=timeout_ms,
-    )
+    def started() -> bool:
+        in_flight = service._plot_in_flight  # noqa: SLF001
+        return service.plot_state.phase is PlotPhase.RUNNING or in_flight
+
+    wait_until(started, timeout_ms=timeout_ms)
 
 
 def wait_for_fake_plot_invocation(
@@ -62,10 +63,11 @@ def wait_for_fake_plot_invocation(
 
 
 def wait_for_plot_finished(service: PlotterService, *, timeout_ms: int = 3000) -> None:
-    wait_until(
-        lambda: service.plot_state.phase in _TERMINAL_PLOT_PHASES and not service._plot_in_flight,  # noqa: SLF001
-        timeout_ms=timeout_ms,
-    )
+    def finished() -> bool:
+        in_flight = service._plot_in_flight  # noqa: SLF001
+        return service.plot_state.phase in _TERMINAL_PLOT_PHASES and not in_flight
+
+    wait_until(finished, timeout_ms=timeout_ms)
 
 
 def wait_for_plot_success(service: PlotterService, *, timeout_ms: int = 3000) -> None:

@@ -1,0 +1,12 @@
+[flake8]
+# Match Ruff (pyproject.toml line-length = 100). The Flake8 extension
+# otherwise defaults to 79 and flags most of the formatted source.
+max-line-length = 100
+# E203/W503 disagree with the Ruff formatter (slice whitespace, line breaks before binary ops).
+extend-ignore = E203, W503
+exclude =
+    .git,
+    .venv,
+    __pycache__,
+    build,
+    dist,
