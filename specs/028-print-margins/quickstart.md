@@ -29,7 +29,7 @@ No hardware test is required.
 
 ## Manual
 
-Launch the app (`./lance.sh` or the dev entry point) and load a drawing:
+Launch the app (`./open.sh` or the dev entry point) and load a drawing:
 
 1. Confirm margins start at 10.0 / 10.0 and the printable line matches the current work area minus 20 mm on each axis.
 2. Set 0 / 0. The inner boundary meets the work-area boundary and artwork can reach the machine edge.

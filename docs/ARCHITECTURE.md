@@ -122,7 +122,7 @@ ActionBar                    status strip · progress · pen-change banner · bu
 | 007 | Multi-layer workflow and pen-change waits |
 | 008 | Safe stop and home sequence |
 | 009 | Root SVG groups as layers fallback |
-| 010 | macOS `PlotPilot.app` (PyInstaller, `lance.sh`) |
+| 010 | macOS `PlotPilot.app` (PyInstaller, `./build.sh`, `./open.sh`) |
 | 011 | Fast headless test suite; hardware marker |
 | 012 | Optional path reordering (`-G1`) |
 | 013 | Plotter model travel limits and page preflight |

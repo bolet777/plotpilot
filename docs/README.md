@@ -18,6 +18,5 @@
 
 ### macOS app bundle
 
-- [010 quickstart](../specs/010-macos-app-bundle/quickstart.md) — `./lance.sh`, PyInstaller, icons
-- Icons: `assets/icons/icon.png` → `./scripts/regenerate_icons.sh`
-- Build `.app` only: `./scripts/build_macos_app.sh`
+- [010 quickstart](../specs/010-macos-app-bundle/quickstart.md) — `./build.sh`, `./open.sh`, `./install.sh`, `./publish.sh`
+- Icons: `assets/icons/icon.png` → `./scripts/regenerate_icons.sh`, then `./build.sh`

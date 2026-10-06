@@ -28,7 +28,7 @@ specs/NNN-short-name/
 | 007 | [multi-layer-workflow](007-multi-layer-workflow/) | Plot checked layers; pen-change pauses |
 | 008 | [safe-stop-home](008-safe-stop-home/) | Stop → raise pen → home → disable XY |
 | 009 | [root-groups-as-layers](009-root-groups-as-layers/) | Fallback layers from root `<g>` groups |
-| 010 | [macos-app-bundle](010-macos-app-bundle/) | PyInstaller `PlotPilot.app`, `lance.sh`, icons |
+| 010 | [macos-app-bundle](010-macos-app-bundle/) | PyInstaller `PlotPilot.app`, `./build.sh`, `./open.sh`, icons |
 | 011 | [test-suite-fast-and-headless](011-test-suite-fast-and-headless/) | Fast pytest; hardware tests opt-in |
 | 012 | [plot-optimization](012-plot-optimization/) | Path reordering option sent to axicli |
 | 013 | [plotter-model-and-bounds](013-plotter-model-and-bounds/) | Model travel limits and page preflight |

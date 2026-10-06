@@ -41,7 +41,7 @@ _INSTALL_HINT = (
 
 
 def bundled_cli_path() -> Path | None:
-    """``axicli`` placed beside the executable by ``package-release.sh``.
+    """``axicli`` placed beside the executable by ``./publish.sh``.
 
     A Finder-launched app does not see Terminal's PATH. The release zip ships a
     private copy so plot commands do not depend on a separate install.

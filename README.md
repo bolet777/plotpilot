@@ -27,7 +27,7 @@
 
 PlotPilot is a desktop controller for pen plotters. It opens an SVG, lists its layers, shows each layer on the machine’s page, and sends that same geometry to the AxiDraw through [`axicli`](https://axidraw.com/doc/cli_api/). The preview is the prepared plot: position, scale, rotation, margins, and clipping are applied before anything is drawn on screen or on paper.
 
-A downloadable Mac app is a zip of `PlotPilot.app`, built on your machine with `./package-release.sh`. With a Developer ID certificate and notarization, the recipient unzips and opens the app. The zip includes `axicli`, so they do not install Python or the AxiDraw command-line tools.
+A downloadable Mac app is a zip of `PlotPilot.app`, built on your machine with `./publish.sh`. With a Developer ID certificate and notarization, the recipient unzips and opens the app. The zip includes `axicli`, so they do not install Python or the AxiDraw command-line tools.
 
 ## What you can do
 
@@ -102,7 +102,7 @@ The full walkthrough, shortcuts, and control reference are in the [user guide](d
 - [uv](https://docs.astral.sh/uv/)
 - [AxiDraw software](https://axidraw.com/doc/) (`axicli` on `PATH`) when you run from source and want to plot
 
-The interface and plot preparation run without hardware. A connected AxiDraw is needed only when you plot. A zip from `./package-release.sh` already contains `axicli`.
+The interface and plot preparation run without hardware. A connected AxiDraw is needed only when you plot. A zip from `./publish.sh` already contains `axicli`.
 
 ## Run PlotPilot
 
@@ -110,16 +110,17 @@ The interface and plot preparation run without hardware. A connected AxiDraw is 
 git clone https://github.com/bolet777/plotpilot.git
 cd plotpilot
 uv sync --group dev
-./lance.sh
+./open.sh
 ```
 
-`./lance.sh` builds `dist/PlotPilot.app` and opens it, with the PlotPilot name and icon in the Dock. Later launches can skip the build:
+| Command | What it does |
+|---|---|
+| `./build.sh` | Rebuild `dist/PlotPilot.app` |
+| `./open.sh` | Open that app. Builds it only when it is missing. `./open.sh --rebuild` forces a build |
+| `./install.sh` | Copy the built app into `/Applications` |
+| `./publish.sh` | Build, add `axicli`, notarize, zip, and upload a GitHub Release |
 
-```bash
-./lance.sh --no-build
-```
-
-For a faster edit loop, run from source. The Dock may show Python instead of PlotPilot:
+`./open.sh` uses the PlotPilot name and icon in the Dock. For a faster edit loop, run from source. The Dock may show Python instead of PlotPilot:
 
 ```bash
 uv run plotpilot
@@ -127,13 +128,13 @@ uv run plotpilot
 
 ## Share a build
 
-On your Mac, from the repository root:
+Commit the source first, then from the repository root:
 
 ```bash
-./package-release.sh
+./publish.sh
 ```
 
-This builds `PlotPilot.app`, downloads the official AxiDraw command-line interface into the app, writes `dist/PlotPilot-<version>-macos-<arch>.zip`, and uploads that zip to a [GitHub Release](https://github.com/bolet777/plotpilot/releases) tagged `v<version>`. The zip stays out of git. Commit the source first: the script pushes that commit, then attaches the zip. `./package-release.sh --no-publish` stops after the zip.
+This builds `PlotPilot.app`, downloads the official AxiDraw command-line interface into the app, signs and notarizes it, writes `dist/PlotPilot-<version>-macos-<arch>.zip`, and uploads that zip to a [GitHub Release](https://github.com/bolet777/plotpilot/releases) tagged `v<version>`. The zip stays out of git. The script pushes the current commit, then attaches the zip.
 
 Build on the same kind of Mac your recipients use. An Apple Silicon zip does not launch on an Intel Mac.
 
@@ -158,7 +159,7 @@ uv run ruff format src tests
 
 Tests use a fake plotter and do not need a display, an AxiDraw, or `axicli`. See [tests/README.md](tests/README.md) and [docs/testing.md](docs/testing.md).
 
-Icons are regenerated from `assets/icons/icon.png` with `./scripts/regenerate_icons.sh`. A bundle-only build is `./scripts/build_macos_app.sh`.
+Icons are regenerated from `assets/icons/icon.png` with `./scripts/regenerate_icons.sh`, then `./build.sh`.
 
 ## License
 
