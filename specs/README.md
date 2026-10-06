@@ -36,6 +36,10 @@ specs/NNN-short-name/
 | 015 | [viewport-positioning-and-clipping](015-viewport-positioning-and-clipping/) | Position/scale artwork; geometric clip before axicli |
 | 016 | [project-session](016-project-session/) | Versioned `.plotpilot` save and reopen |
 | 017 | [svg-golden-baseline](017-svg-golden-baseline/) | SVG golden oracles; known geometry bugs as xfail |
+| 018 | [fix-core-geometry](018-fix-core-geometry/) | Clip, arc flattening, degenerate cleanup |
+| 019 | [canonical-svg-geometry](019-canonical-svg-geometry/) | One user-space → mm page mapping |
+| 020 | [robust-layer-isolation](020-robust-layer-isolation/) | Layer isolation keeps root CSS, filters, and clips |
+| 021 | [preview-equals-output](021-preview-equals-output/) | Preview renders the same prepared geometry as the plot |
 | 022 | [vpype-evaluation](022-vpype-evaluation/) | Evaluate vpype as geometry engine (spike only; keep current engine) |
 | 023 | [axicli-controls](023-axicli-controls/) | Explicit axicli path order, pen heights, `-N`, `-C`, home, estimate |
 | 025 | [preview-performance](025-preview-performance/) | Cached flatten; async clip so position and scale stay responsive |

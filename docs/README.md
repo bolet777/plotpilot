@@ -1,25 +1,23 @@
 # PlotPilot documentation
 
-## Core
+## Using the app
 
-- [Architecture](ARCHITECTURE.md) — modules, data flows, SpecKit slice map
-- [UI V2](UI-V2.md) — V2 layout, theme hooks, V1→V2 feature checklist
-- [Project README](../README.md) — setup, run, feature summary
-- [Constitution](../.specify/memory/constitution.md) — principles and quality gates
-- [Audit 2026-09-30](AUDIT-2026-09-30.md) — technical/product audit, SVG pipeline risks, prioritized roadmap (FR)
+- [User guide](guide.md) — window tour, placement, margins, plotting, projects, shortcuts
+- [README](../README.md) — what PlotPilot does, requirements, and how to launch it
+- [Screenshot](PlotPilot.png) — the main window during a layer plot
 
-## Features (SpecKit)
+## Contributors
 
-Each capability is specified under `specs/NNN-slug/` (`spec.md`, `plan.md`, `tasks.md`, …).
-
-- [Feature index](../specs/README.md) — slices 001–023
+- [Architecture](ARCHITECTURE.md) — modules, data flows, and how the UI is composed
+- [UI V2](UI-V2.md) — layout, theme hooks, and where each control lives
+- [Tests](testing.md) — fast, full, and hardware pytest loops
+- [Test layout](../tests/README.md) — conventions and coverage map
+- [Feature index](../specs/README.md) — SpecKit slices
+- [Constitution](../.specify/memory/constitution.md) — engineering principles
+- [Audit 2026-09-30](AUDIT-2026-09-30.md) — SVG pipeline risks and the roadmap that followed (French)
 
 ### macOS app bundle
 
 - [010 quickstart](../specs/010-macos-app-bundle/quickstart.md) — `./lance.sh`, PyInstaller, icons
-
-## Development
-
-- [Tests](../tests/README.md) — pytest layout and conventions
 - Icons: `assets/icons/icon.png` → `./scripts/regenerate_icons.sh`
 - Build `.app` only: `./scripts/build_macos_app.sh`

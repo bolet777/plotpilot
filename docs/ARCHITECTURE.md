@@ -1,8 +1,9 @@
 # PlotPilot architecture
 
-High-level layout of the application as implemented. User capabilities map to
-SpecKit slices **001–016** under `specs/`; slice **017** adds the SVG golden
-baseline. This document describes how code is organized today.
+High-level layout of the application as implemented. User-facing behaviour is
+described in the [user guide](guide.md). SpecKit slices under `specs/` record
+how each capability was specified. This document describes how code is
+organized today.
 
 ## Goals
 
@@ -129,6 +130,16 @@ ActionBar                    status strip · progress · pen-change banner · bu
 | 015 | Artwork position/scale and geometric clip |
 | 016 | `.plotpilot` project save and reopen |
 | 017 | SVG golden baseline (oracles; no geometry behavior change) |
+| 018 | Core geometry fixes (clip, arc flatten, degenerate cleanup) |
+| 019 | Canonical SVG page geometry in millimetres |
+| 020 | Layer isolation (root CSS, filters, clip paths) |
+| 021 | Preview uses the same prepared geometry as the plot |
+| 022 | vpype evaluation (spike; current engine kept) |
+| 023 | axicli path order, pen heights, `-N`, `-C`, home, estimate |
+| 025 | Cached flatten and async clip so position and scale stay responsive |
+| 026 | Slider transform panel synced with preview drag |
+| 027 | Resizable window; properties scroll and the action bar wraps |
+| 028 | Editable print margins and a shared printable rectangle |
 
 ## Platform notes
 
