@@ -27,7 +27,7 @@
 
 PlotPilot is a desktop controller for pen plotters. It opens an SVG, lists its layers, shows each layer on the machine’s page, and sends that same geometry to the AxiDraw through [`axicli`](https://axidraw.com/doc/cli_api/). The preview is the prepared plot: position, scale, rotation, margins, and clipping are applied before anything is drawn on screen or on paper.
 
-There is no signed download yet. You build and launch the app from this repository.
+A downloadable Mac app is a zip of `PlotPilot.app`, built on your machine with `./package-release.sh`. It is not signed with an Apple Developer ID, so the first open is a right-click. The zip includes `axicli`, so the person who receives it does not install Python or the AxiDraw command-line tools.
 
 ## What you can do
 
@@ -86,7 +86,7 @@ Supported models: AxiDraw V2 / V3 / SE/A4, V3/A3 or SE/A3, V3 XLX, MiniKit, SE/A
 
 ## A plotting session
 
-1. Install [AxiDraw software](https://axidraw.com/doc/) so `axicli` is on your `PATH`, and connect the plotter.
+1. Connect the plotter. A release zip already includes `axicli`. From a source checkout, install [AxiDraw software](https://axidraw.com/doc/) so `axicli` is on your `PATH`.
 2. Launch PlotPilot and open an SVG (**File → Open SVG…**, **⌘O**).
 3. Pick a layer. Fit the preview, then place, scale, and rotate the drawing inside the printable area.
 4. Set margins and speeds. Run **Estimate** if you want a duration before plotting.
@@ -100,9 +100,9 @@ The full walkthrough, shortcuts, and control reference are in the [user guide](d
 - macOS
 - [Python 3.12](https://www.python.org/)
 - [uv](https://docs.astral.sh/uv/)
-- [AxiDraw software](https://axidraw.com/doc/) (`axicli` on `PATH`) for a real machine
+- [AxiDraw software](https://axidraw.com/doc/) (`axicli` on `PATH`) when you run from source and want to plot
 
-The interface and plot preparation run without hardware. A connected AxiDraw is needed only when you plot.
+The interface and plot preparation run without hardware. A connected AxiDraw is needed only when you plot. A zip from `./package-release.sh` already contains `axicli`.
 
 ## Run PlotPilot
 
@@ -124,6 +124,20 @@ For a faster edit loop, run from source. The Dock may show Python instead of Plo
 ```bash
 uv run plotpilot
 ```
+
+## Share a build
+
+On your Mac, from the repository root:
+
+```bash
+./package-release.sh
+```
+
+This builds `PlotPilot.app`, downloads the official AxiDraw command-line interface into the app, writes `dist/PlotPilot-<version>-macos-<arch>.zip`, and uploads that zip to a [GitHub Release](https://github.com/bolet777/plotpilot/releases) tagged `v<version>`. The zip stays out of git. Commit the source first: the script pushes that commit, then attaches the zip. `./package-release.sh --no-publish` stops after the zip.
+
+Build on the same kind of Mac your recipients use. An Apple Silicon zip does not launch on an Intel Mac.
+
+The app stays MIT. `axicli` stays a separate program, with its own license files inside the bundle. It is not added to PlotPilot’s Python dependencies.
 
 ## Documentation
 

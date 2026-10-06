@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from plotpilot.models.plotter_status import PlotterConnectionState
@@ -63,6 +64,24 @@ def test_missing_cli_is_error() -> None:
     backend = AxiDrawCliBackend(cli_path="/nonexistent/axicli")
     status = backend.detect()
     assert status.state is PlotterConnectionState.ERROR
+
+
+def test_resolve_cli_prefers_bundled_copy_when_frozen(tmp_path: Path, monkeypatch) -> None:
+    macos = tmp_path / "MacOS"
+    macos.mkdir()
+    exe = macos / "PlotPilot"
+    exe.write_text("")
+    cli = macos / "axicli"
+    cli.write_text("#!/bin/sh\n")
+    cli.chmod(0o755)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(
+        "plotpilot.plotter.axidraw.shutil.which",
+        lambda name: "/usr/bin/axicli" if name == "axicli" else None,
+    )
+    backend = AxiDrawCliBackend(cli_path="axicli")
+    assert backend._resolve_cli() == str(cli)
 
 
 def test_resolve_cli_prefers_path(monkeypatch) -> None:

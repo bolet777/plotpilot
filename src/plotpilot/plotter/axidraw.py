@@ -8,6 +8,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,20 @@ _INSTALL_HINT = (
 )
 
 
+def bundled_cli_path() -> Path | None:
+    """``axicli`` placed beside the executable by ``package-release.sh``.
+
+    A Finder-launched app does not see Terminal's PATH. The release zip ships a
+    private copy so plot commands do not depend on a separate install.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    candidate = Path(sys.executable).resolve().parent / "axicli"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 def cli_search_directories() -> list[Path]:
     """Locations a Finder-launched .app does not inherit from the shell PATH.
 
@@ -55,6 +70,9 @@ def cli_search_directories() -> list[Path]:
 
 
 def resolve_cli_executable(name: str) -> str | None:
+    bundled = bundled_cli_path()
+    if bundled is not None and bundled.name == name:
+        return str(bundled)
     found = shutil.which(name)
     if found:
         return found

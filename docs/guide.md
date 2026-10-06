@@ -20,9 +20,8 @@ The three columns can be resized. **View → Layers Sidebar** (**⌘⇧L**) hide
 
 ## Before you plot
 
-1. Install [AxiDraw software](https://axidraw.com/doc/) so the `axicli` command is available in Terminal.
-2. Connect the AxiDraw by USB.
-3. Launch PlotPilot with `./lance.sh` from the repository (see the [README](../README.md)).
+1. Connect the AxiDraw by USB.
+2. Launch PlotPilot. A zip shared from a GitHub Release already contains `axicli`: unzip, then right-click `PlotPilot.app` and choose **Open** the first time. From a source checkout, `./lance.sh` still needs [AxiDraw software](https://axidraw.com/doc/) so `axicli` is on your `PATH` (see the [README](../README.md)).
 
 The device chip in the top bar turns green and reads **Connected** when the plotter answers. **Reconnect** and **Refresh** ask again. While the app is idle it also checks for the plotter on its own.
 
@@ -189,4 +188,4 @@ On a Mac, these use the Command key.
 
 ## What this version does not include
 
-PlotPilot drives an AxiDraw through `axicli`. Other plotter backends are not shipped. Releases are built on your Mac from source; a signed, notarized download is not published from this repository yet.
+PlotPilot drives an AxiDraw through `axicli`. Other plotter backends are not shipped. `./package-release.sh` builds an unsigned zip you can attach to a GitHub Release; that zip includes `axicli`. A signed, notarized download is not produced by this repository.
