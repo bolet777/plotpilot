@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plotpilot"
-version = "0.1.0"
+version = "0.1.1"
 description = "Open-source macOS controller for pen plotters, starting with AxiDraw"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
