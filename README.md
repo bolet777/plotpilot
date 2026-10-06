@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/bolet777/plotpilot/releases/latest/download/PlotPilot-macos-arm64.dmg"><img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-111111?style=for-the-badge" alt="Download PlotPilot for Mac"></a>
+  <a href="https://github.com/bolet777/plotpilot/releases/latest/download/PlotPilot-macos-arm64.dmg"><img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-2ea44f?style=for-the-badge&labelColor=2ea44f&logo=apple&logoColor=white" alt="Download PlotPilot for Mac"></a>
 </p>
 
 <p align="center">
