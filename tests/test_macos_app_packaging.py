@@ -13,6 +13,7 @@ def test_macos_packaging_files_exist() -> None:
     assert not (REPO / "lance.sh").exists()
     assert not (REPO / "deploy.sh").exists()
     assert not (REPO / "package-release.sh").exists()
+    assert not (REPO / "scripts/package_app.sh").exists()
     assert (REPO / "packaging/macos/entry.py").is_file()
     assert (REPO / "packaging/macos/plotpilot.spec").is_file()
     assert (REPO / "scripts/build_app.sh").is_file()
