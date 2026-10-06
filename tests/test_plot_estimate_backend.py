@@ -46,6 +46,18 @@ Pen-up travel distance: 0.2 m
 """
 
 
+def test_injected_runner_does_not_need_axicli_installed(monkeypatch) -> None:
+    monkeypatch.setattr("plotpilot.plotter.axidraw.resolve_cli_executable", lambda _name: None)
+
+    def runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, PREVIEW_OUTPUT, "")
+
+    backend = AxiDrawCliBackend(cli_path="axicli", _runner=runner)
+    estimate = backend.estimate_plot_svg(Path("layer.svg"))
+    assert estimate is not None
+    assert estimate.duration_seconds == 3.5
+
+
 def test_estimate_plot_svg_parses_preview() -> None:
     captured: list[list[str]] = []
 

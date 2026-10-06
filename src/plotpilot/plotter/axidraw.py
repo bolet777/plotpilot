@@ -118,6 +118,10 @@ class AxiDrawCliBackend:
     _cancel_requested: bool = field(default=False, init=False, repr=False)
 
     def _resolve_cli(self) -> str | None:
+        # Tests inject a runner and pass a bare command name. Looking that name
+        # up on PATH would fail on machines that do not have axicli installed.
+        if self._runner is not _default_runner:
+            return self.cli_path
         if "/" in self.cli_path or self.cli_path.startswith("."):
             return self.cli_path
         return resolve_cli_executable(self.cli_path)

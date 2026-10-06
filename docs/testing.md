@@ -48,7 +48,9 @@ uv run ruff format --check src tests
 uv run pytest -m "not hardware" -q
 ```
 
-That is the full software suite, including slow tests. Hardware tests stay opt-in and do not run there. The job runs on macOS with `QT_QPA_PLATFORM=offscreen`.
+That is the full software suite, including slow tests. Hardware tests stay opt-in and do not run there. The job runs on macOS with `QT_QPA_PLATFORM=offscreen`. The `Tests` check is required before a pull request can merge into `main`.
+
+[`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) analyzes Python on every push and once a week. Its `CodeQL` check is required on `main` as well. Dependabot alerts are enabled for vulnerable dependencies.
 
 ## Expected suite timing (local dev machine, order of magnitude)
 

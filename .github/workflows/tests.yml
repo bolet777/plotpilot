@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   test:
+    name: Tests
     # A push already covers the same commit on this repository. Fork pull
     # requests only fire pull_request, so they still run.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
