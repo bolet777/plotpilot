@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Zip dist/PlotPilot.app for distribution. Does not upload it.
-# Called by scripts/publish.sh.
+# Not used by ./publish.sh. The public download is the disk image from package_dmg.sh.
 # Writes dist/PlotPilot-<version>-macos-<arch>.zip and a notes file beside it.
 set -euo pipefail
 

@@ -42,7 +42,7 @@ Keep third-party dependencies minimal and justified.
 - **UI**: PySide6 (Qt)
 - **Plotters**: AxiDraw via `plotpilot/plotter/` (`AxiDrawCliBackend` + `FakePlotterBackend` for tests)
 - **Layout**: `src/plotpilot/` with `app`, `resources`, `ui`, `svg`, `plotter`, `services`, `models`
-- **Packaging**: Local PyInstaller `PlotPilot.app` (`./build.sh`, `./open.sh`, `./install.sh`); public zip via `./publish.sh` (Developer ID and notarization)
+- **Packaging**: Local PyInstaller `PlotPilot.app` (`./build.sh`, `./open.sh`, `./install.sh`); public disk image via `./publish.sh` (Developer ID and notarization)
 
 ## Quality gates
 

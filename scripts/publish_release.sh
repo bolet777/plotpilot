@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Upload dist/PlotPilot-<version>-macos-<arch>.zip to a GitHub Release.
-# The zip is not committed. Called by scripts/publish.sh after the commit is pushed.
+# Upload dist/PlotPilot-<version>-macos-<arch>.dmg to a GitHub Release.
+# The disk image is not committed. Called by scripts/publish.sh after the commit is pushed.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -8,11 +8,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 VERSION="$(app_version)"
 TAG="v${VERSION}"
 NAME="$(release_name)"
-ZIP="$ROOT/dist/${NAME}.zip"
+DMG="$ROOT/dist/${NAME}.dmg"
 NOTES="$ROOT/dist/${NAME}-notes.txt"
 
-if [[ ! -f "$ZIP" ]]; then
-  echo "Missing $ZIP — run ./publish.sh." >&2
+if [[ ! -f "$DMG" ]]; then
+  echo "Missing $DMG — run ./publish.sh." >&2
   exit 1
 fi
 if [[ ! -f "$NOTES" ]]; then
@@ -21,10 +21,10 @@ if [[ ! -f "$NOTES" ]]; then
 fi
 
 if gh release view "$TAG" >/dev/null 2>&1; then
-  echo "Release ${TAG} exists. Replacing the zip."
-  gh release upload "$TAG" "$ZIP" --clobber
+  echo "Release ${TAG} exists. Replacing the disk image."
+  gh release upload "$TAG" "$DMG" --clobber
 else
-  gh release create "$TAG" "$ZIP" \
+  gh release create "$TAG" "$DMG" \
     --title "PlotPilot ${VERSION}" \
     --notes-file "$NOTES" \
     --latest

@@ -15,7 +15,7 @@ From the repository root:
 | `./open.sh` | Open that app. Builds it only when it is missing |
 | `./open.sh --rebuild` | Rebuild, then open |
 | `./install.sh` | Copy the built app into `/Applications` |
-| `./publish.sh` | Build, add `axicli`, notarize, zip, and upload a GitHub Release |
+| `./publish.sh` | Build, add `axicli`, notarize, make a disk image, and upload a GitHub Release |
 
 Pin to the Dock from the running app (Options → Keep in Dock). The Dock tooltip should read **PlotPilot**.
 

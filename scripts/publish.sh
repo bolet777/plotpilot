@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, bundle axicli, notarize, zip, and publish a GitHub Release.
+# Build, bundle axicli, notarize, make a disk image, and publish a GitHub Release.
 # Root helper: ./publish.sh
 set -euo pipefail
 
@@ -19,7 +19,7 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Commit or stash these changes before publishing. The Release tag must match the zip." >&2
+  echo "Commit or stash these changes before publishing. The Release tag must match the disk image." >&2
   git status --short >&2
   exit 1
 fi
@@ -39,5 +39,5 @@ git push origin HEAD
 "$ROOT/scripts/build_app.sh"
 "$ROOT/scripts/bundle_axicli.sh"
 "$ROOT/scripts/notarize_app.sh"
-"$ROOT/scripts/package_app.sh"
+"$ROOT/scripts/package_dmg.sh"
 "$ROOT/scripts/publish_release.sh"
