@@ -40,21 +40,41 @@ case "$(uname -m)" in
   *) MAC_KIND="Intel" ;;
 esac
 
+detach_mount() {
+  local target="$1"
+  local attempt
+  sync
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if hdiutil detach "$target" >/dev/null 2>&1; then
+      return 0
+    fi
+    if hdiutil detach "$target" -force >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Could not unmount $target. Close any Finder window named PlotPilot, then run ./publish.sh again." >&2
+  hdiutil detach "$target" -force
+}
+
 cleanup() {
   if [[ -d "$MOUNT" ]] && mount | grep -F -q " on $MOUNT "; then
-    hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true
+    detach_mount "$MOUNT" || true
   fi
 }
 trap cleanup EXIT
 
+if [[ -d "$MOUNT" ]] && mount | grep -F -q " on $MOUNT "; then
+  detach_mount "$MOUNT"
+fi
 rm -rf "$WORK"
 mkdir -p "$MOUNT"
 size_mb="$(du -sm "$APP" | awk '{ print $1 }')"
 hdiutil create -size "$((size_mb + 100))m" -fs HFS+ -volname "PlotPilot" "$RW" >/dev/null
-hdiutil attach "$RW" -mountpoint "$MOUNT" -nobrowse >/dev/null
+hdiutil attach "$RW" -mountpoint "$MOUNT" -nobrowse -noautoopen >/dev/null
 ditto "$APP" "$MOUNT/PlotPilot.app"
 ln -s /Applications "$MOUNT/Applications"
-hdiutil detach "$MOUNT" >/dev/null
+detach_mount "$MOUNT"
 rmdir "$MOUNT" 2>/dev/null || true
 
 rm -f "$DMG"
