@@ -23,6 +23,15 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/bolet777/plotpilot/releases/latest/download/PlotPilot-macos-arm64.dmg"><img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-111111?style=for-the-badge" alt="Download PlotPilot for Mac"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/bolet777/plotpilot/releases/latest">All releases</a>
+  · Apple Silicon · open the disk image and drag PlotPilot to Applications
+</p>
+
+<p align="center">
   <em>Place the drawing, watch the page, and plot layer by layer — with progress, pen changes, and a safe stop.</em>
 </p>
 

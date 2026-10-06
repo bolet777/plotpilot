@@ -9,6 +9,7 @@ VERSION="$(app_version)"
 TAG="v${VERSION}"
 NAME="$(release_name)"
 DMG="$ROOT/dist/${NAME}.dmg"
+STABLE="$ROOT/dist/PlotPilot-macos-$(uname -m).dmg"
 NOTES="$ROOT/dist/${NAME}-notes.txt"
 
 if [[ ! -f "$DMG" ]]; then
@@ -20,11 +21,14 @@ if [[ ! -f "$NOTES" ]]; then
   exit 1
 fi
 
+# Stable name so the README can link to /releases/latest/download/ forever.
+cp -f "$DMG" "$STABLE"
+
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Release ${TAG} exists. Replacing the disk image."
-  gh release upload "$TAG" "$DMG" --clobber
+  gh release upload "$TAG" "$DMG" "$STABLE" --clobber
 else
-  gh release create "$TAG" "$DMG" \
+  gh release create "$TAG" "$DMG" "$STABLE" \
     --title "PlotPilot ${VERSION}" \
     --notes-file "$NOTES" \
     --latest
