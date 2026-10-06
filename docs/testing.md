@@ -38,6 +38,18 @@ uv run pytest -m hardware -v
 
 Hardware tests are excluded by default (`addopts` in `pyproject.toml` and collection skips).
 
+## GitHub
+
+[`.github/workflows/tests.yml`](../.github/workflows/tests.yml) runs on every push, and on pull requests opened from a fork. It installs the locked dependencies, then runs:
+
+```bash
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run pytest -m "not hardware" -q
+```
+
+That is the full software suite, including slow tests. Hardware tests stay opt-in and do not run there. The job runs on macOS with `QT_QPA_PLATFORM=offscreen`.
+
 ## Expected suite timing (local dev machine, order of magnitude)
 
 | Suite | Target |

@@ -10,7 +10,8 @@ display, attached AxiDraw, or `axicli` on `PATH`.
 - **Main window tests** inject fake plotter backends and drive Qt widgets where
   needed; they validate wiring, not visual pixels.
 - **Hardware / axicli** — not part of CI; optional manual checks on a machine
-  with AxiDraw software installed.
+  with AxiDraw software installed. GitHub Actions (`.github/workflows/tests.yml`)
+  runs ruff and `uv run pytest -m "not hardware"` on every push.
 - **Settings isolation** — an autouse fixture in `conftest.py` redirects
   `QSettings` to INI files under `tmp_path`, so tests never touch the real
   `com.plotpilot.PlotPilot` preferences. Open stores with

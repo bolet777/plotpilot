@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # A push already covers the same commit on this repository. Fork pull
+    # requests only fire pull_request, so they still run.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # Qt offscreen tests segfault on Linux for this suite. macOS matches the app.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Ruff
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+
+      - name: Pytest
+        run: uv run pytest -m "not hardware" -q
+        env:
+          QT_QPA_PLATFORM: offscreen

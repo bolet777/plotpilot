@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT license"></a>
+  <a href="https://github.com/bolet777/plotpilot/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/bolet777/plotpilot/tests.yml?branch=main&label=tests" alt="Tests status"></a>
   <img src="https://img.shields.io/badge/platform-macOS-111111" alt="macOS">
   <img src="https://img.shields.io/badge/python-3.12-3776AB" alt="Python 3.12">
   <img src="https://img.shields.io/badge/UI-PySide6-41CD52" alt="PySide6">
@@ -157,7 +158,7 @@ uv run ruff check src tests
 uv run ruff format src tests
 ```
 
-Tests use a fake plotter and do not need a display, an AxiDraw, or `axicli`. See [tests/README.md](tests/README.md) and [docs/testing.md](docs/testing.md).
+Tests use a fake plotter and do not need a display, an AxiDraw, or `axicli`. The same non-hardware suite, plus ruff, runs on GitHub after every push. See [tests/README.md](tests/README.md) and [docs/testing.md](docs/testing.md).
 
 Icons are regenerated from `assets/icons/icon.png` with `./scripts/regenerate_icons.sh`, then `./build.sh`.
 
