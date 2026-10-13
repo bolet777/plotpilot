@@ -58,7 +58,7 @@ The centre of the window is the machine page:
 
 The **move** tool (✥, on by default) drags the drawing inside the printable area. That drag edits the same X and Y as the Transform sliders. Panning the view does not move the drawing. The move tool is inactive while a plot is running.
 
-The **clip** tool (▭) draws one keep-inside shape in machine millimetres. Choose a rectangle or an ellipse while the tool is on. Hold Shift to constrain a square or a circle. Drag inside the shape to move it, or drag a handle to resize it. Delete or Backspace removes it. The amber outline stays on the preview and is saved with the project; it is not part of the plotted drawing. Clip and move are never on at the same time. Zoom, pan, scale, and orientation do not move the shape. Strokes are cut to the printable area first, then to the shape.
+The **clip** tool (▭) draws one shape in machine millimetres. Choose a rectangle or an ellipse while the tool is on. Hold Shift to constrain a square or a circle. Once the shape exists, choose **In** (keep the strokes inside it) or **Out** (cut those strokes out and keep the rest of the printable area). Switching mode keeps the shape where it is and updates the preview. Drag inside the shape to move it, or drag a handle to resize it. Delete or Backspace removes it. The amber outline stays on the preview and is saved with the project; it is not part of the plotted drawing. Clip and move are never on at the same time. Zoom, pan, scale, and orientation do not move the shape. Strokes are cut to the printable area first, then to the shape.
 
 ## Place the drawing
 
@@ -141,7 +141,7 @@ Check every layer that should be part of the job, then **Plot Checked Layers**. 
 
 ### Estimate first
 
-**Estimate** runs the same prepared geometry the plot would use, including clipping to the printable area and to a keep-inside rectangle when one is drawn, and prints a duration on the status line. Checked layers are included when any box is checked; otherwise the selected layer is measured. The command is an offline preview (`axicli` with `-v -T`) and does not move the plotter. Change margins, scale, or speed and estimate again; the number follows the current setup.
+**Estimate** runs the same prepared geometry the plot would use, including the printable area and the clip shape when one is drawn, and prints a duration on the status line. Checked layers are included when any box is checked; otherwise the selected layer is measured. The command is an offline preview (`axicli` with `-v -T`) and does not move the plotter. Change margins, scale, or speed and estimate again; the number follows the current setup.
 
 ## Projects
 
@@ -150,7 +150,7 @@ A project remembers one drawing’s setup:
 - path to the SVG
 - which layers are checked
 - position, scale, and orientation
-- keep-inside rectangle or ellipse, when one is drawn
+- clip rectangle or ellipse, and whether it keeps or removes the inside, when one is drawn
 - print margins
 - plot settings
 - fallback work area, when the SVG has no page size

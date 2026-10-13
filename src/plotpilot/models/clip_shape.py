@@ -1,12 +1,20 @@
-"""Optional keep-inside shapes in machine millimetres (Qt-free)."""
+"""Optional clip shapes in machine millimetres (Qt-free)."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 
 # Drags smaller than this do not replace an existing rectangle.
 MIN_CLIP_SIDE_MM = 1.0
+
+
+class ClipMode(StrEnum):
+    """How a clip shape cuts strokes that are already inside the printable area."""
+
+    KEEP_INSIDE = "keep_inside"
+    REMOVE_INSIDE = "remove_inside"
 
 
 class ClipRectangleError(ValueError):

@@ -29,6 +29,7 @@ display, attached AxiDraw, or `axicli` on `PATH`.
 | Keep-inside rectangle (029) | `test_rectangle_keep_inside.py` |
 | Clip rectangle tool (030) | `test_clip_rectangle_tool.py` |
 | Ellipse keep-inside (031) | `test_ellipse_keep_inside.py` |
+| Remove inside (032) | `test_remove_inside.py` |
 | Page orientation (Transform → Orientation) | `test_artwork_orientation.py` (model, pipeline, preview/plot parity, project file, controls, preview widget, main window) |
 | Plot settings | `test_plot_settings.py`, `test_settings_service.py` |
 | Plotter backend / argv | `test_plotter_backend.py`, `test_plotter_backend_plot_argv.py` |

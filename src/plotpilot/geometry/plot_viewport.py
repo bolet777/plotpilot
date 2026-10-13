@@ -17,7 +17,7 @@ from plotpilot.models.artwork_transform import (
     orient_point,
     resolve_rotation_degrees,
 )
-from plotpilot.models.clip_shape import ClipEllipse, ClipRectangle, ClipShape
+from plotpilot.models.clip_shape import ClipEllipse, ClipMode, ClipRectangle, ClipShape
 from plotpilot.svg.page_geometry import SvgPageGeometry, parse_page_geometry
 from plotpilot.svg.plot_dimensions import PlotDimensionError
 
@@ -82,6 +82,7 @@ def clip_document_polylines(
     page_width_mm: float | None = None,
     page_height_mm: float | None = None,
     keep_inside: ClipShape | None = None,
+    clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Place document polylines and clip them to an arbitrary machine rectangle.
 
@@ -89,10 +90,11 @@ def clip_document_polylines(
     pass the printable-area edges so margins do not shift machine coordinates.
     ``page_width_mm`` / ``page_height_mm`` are required when the transform
     orientation is not ``PRESERVED`` (the page is rotated about its own size).
-    A keep-inside rectangle further limits that window to the overlap, in one
-    Liang–Barsky pass. An ellipse is applied after the printable clip. ``None``
-    leaves the printable window unchanged. A shape that misses the window
-    yields no polylines.
+    Keep-inside rectangle further limits that window to the overlap, in one
+    Liang–Barsky pass. An ellipse is applied after the printable clip. Remove
+    inside always clips to the printable window first, then drops the portion
+    inside the shape. ``None`` leaves the printable window unchanged. A
+    keep-inside shape that misses the window yields no polylines.
     """
     transform.validate()
     clip = _resolve_clip_rect(
@@ -103,17 +105,17 @@ def clip_document_polylines(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
-    rectangle, ellipse = _split_keep_inside(keep_inside)
-    overlap = overlap_clip_rect(clip, rectangle)
-    if overlap is None or not _ellipse_hits(ellipse, overlap):
+    window, ellipse, remove = _shape_cut(clip, keep_inside, clip_mode)
+    if window is None:
         return []
     return _clip_document_subpaths(
         polylines,
         transform,
-        overlap,
+        window,
         page_width_mm=page_width_mm,
         page_height_mm=page_height_mm,
         ellipse=ellipse,
+        remove=remove,
     )
 
 
@@ -128,6 +130,7 @@ def prepare_positioned_plot_svg(
     clip_x_max_mm: float | None = None,
     clip_y_max_mm: float | None = None,
     keep_inside: ClipShape | None = None,
+    clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
 ) -> PreparedPlotSvg:
     """Return clipped plot SVG in machine coordinates (1 unit = 1 mm)."""
     transform.validate()
@@ -139,22 +142,22 @@ def prepare_positioned_plot_svg(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
-    rectangle, ellipse = _split_keep_inside(keep_inside)
-    overlap = overlap_clip_rect(clip, rectangle)
+    window, ellipse, remove = _shape_cut(clip, keep_inside, clip_mode)
     flattened = flatten_document_geometry(svg_text)
-    if overlap is None or not _ellipse_hits(ellipse, overlap):
+    if window is None:
         clipped_paths: list[tuple[tuple[float, float], ...]] = []
         active = clip
     else:
         clipped_paths = _clip_document_subpaths(
             flattened.polylines,
             transform,
-            overlap,
+            window,
             page_width_mm=flattened.page_width_mm,
             page_height_mm=flattened.page_height_mm,
             ellipse=ellipse,
+            remove=remove,
         )
-        active = overlap
+        active = window
 
     return emit_validated_plot_svg(
         clipped_paths,
@@ -257,6 +260,31 @@ def _ellipse_hits(ellipse: ClipEllipse | None, clip: ClipRect) -> bool:
     if ellipse is None:
         return True
     return ellipse_overlaps_rect(ellipse, clip.x_min, clip.y_min, clip.x_max, clip.y_max)
+
+
+def _shape_cut(
+    clip: ClipRect,
+    keep_inside: ClipShape | None,
+    clip_mode: ClipMode,
+) -> tuple[ClipRect | None, ClipEllipse | None, ClipShape | None]:
+    """Return the Liang–Barsky window, a keep-inside ellipse, and a hole.
+
+    Keep-inside rectangles stay on the overlap fast path. Remove inside always
+    uses the printable window, then subtracts the shape. A window of ``None``
+    means a keep-inside shape misses the printable area.
+    """
+    if keep_inside is None or clip_mode is not ClipMode.REMOVE_INSIDE:
+        rectangle, ellipse = _split_keep_inside(keep_inside)
+        overlap = overlap_clip_rect(clip, rectangle)
+        if overlap is None or not _ellipse_hits(ellipse, overlap):
+            return None, None, None
+        return overlap, ellipse, None
+    keep_inside.validate()
+    if isinstance(keep_inside, ClipRectangle):
+        hole = keep_inside if overlap_clip_rect(clip, keep_inside) is not None else None
+        return clip, None, hole
+    hole = keep_inside if _ellipse_hits(keep_inside, clip) else None
+    return clip, None, hole
 
 
 def _validate_emitted_svg(
@@ -409,6 +437,7 @@ def _clip_document_subpaths(
     page_width_mm: float | None = None,
     page_height_mm: float | None = None,
     ellipse: ClipEllipse | None = None,
+    remove: ClipShape | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Orient, place, and Liang–Barsky clip pre-flattened document polylines."""
     transform.validate()
@@ -458,6 +487,21 @@ def _clip_document_subpaths(
                 flush()
                 return
             nx0, ny0, nx1, ny1 = kept
+        if remove is not None:
+            inside = _inside_span(nx0, ny0, nx1, ny1, remove)
+            spans = _outside_spans(nx0, ny0, nx1, ny1, inside)
+            if not spans:
+                flush()
+                return
+            for index, span in enumerate(spans):
+                if index:
+                    flush()
+                append_span(*span)
+            return
+        append_span(nx0, ny0, nx1, ny1)
+
+    def append_span(nx0: float, ny0: float, nx1: float, ny1: float) -> None:
+        nonlocal current
         if _points_near((nx0, ny0), (nx1, ny1)):
             return
         if not current:
@@ -527,6 +571,59 @@ def _snap_point_to_clip(x: float, y: float, clip: ClipRect) -> tuple[float, floa
 
 def _points_near(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return abs(a[0] - b[0]) <= COORD_TOLERANCE_MM and abs(a[1] - b[1]) <= COORD_TOLERANCE_MM
+
+
+def _inside_span(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    shape: ClipShape,
+) -> tuple[float, float, float, float] | None:
+    """Portion of a segment that lies inside the shape. Boundary counts as inside."""
+    if isinstance(shape, ClipEllipse):
+        return clip_segment_to_ellipse(x0, y0, x1, y1, shape)
+    rect = ClipRect(shape.x_mm, shape.y_mm, shape.x_max_mm, shape.y_max_mm)
+    accept, ax0, ay0, ax1, ay1 = clip_segment(x0, y0, x1, y1, rect)
+    if not accept:
+        return None
+    return (ax0, ay0, ax1, ay1)
+
+
+def _outside_spans(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    inside: tuple[float, float, float, float] | None,
+) -> list[tuple[float, float, float, float]]:
+    """Keep the parts of a segment that are outside an inside span.
+
+    A missing or zero-length inside span (a tangent) does not open a hole.
+    A span that covers the segment removes it. Anything else leaves one or two
+    pieces, and the caller must not join those two pieces.
+    """
+    if _points_near((x0, y0), (x1, y1)):
+        return []
+    if inside is None:
+        return [(x0, y0, x1, y1)]
+    ix0, iy0, ix1, iy1 = inside
+    if _points_near((ix0, iy0), (ix1, iy1)):
+        return [(x0, y0, x1, y1)]
+    dx = x1 - x0
+    dy = y1 - y0
+
+    def along(x_mm: float, y_mm: float) -> float:
+        return (x_mm - x0) * dx + (y_mm - y0) * dy
+
+    if along(ix0, iy0) > along(ix1, iy1):
+        ix0, iy0, ix1, iy1 = ix1, iy1, ix0, iy0
+    spans: list[tuple[float, float, float, float]] = []
+    if not _points_near((x0, y0), (ix0, iy0)):
+        spans.append((x0, y0, ix0, iy0))
+    if not _points_near((ix1, iy1), (x1, y1)):
+        spans.append((ix1, iy1, x1, y1))
+    return spans
 
 
 def _dedupe_consecutive_points(

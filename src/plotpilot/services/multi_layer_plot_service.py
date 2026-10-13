@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipShape
+from plotpilot.models.clip_shape import ClipMode, ClipShape
 from plotpilot.models.multi_layer_job import (
     MultiLayerJobLayer,
     MultiLayerJobState,
@@ -69,6 +69,7 @@ class MultiLayerPlotService(QObject):
         fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
         print_margins: PrintMargins | None = None,
         keep_inside: ClipShape | None = None,
+        clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
     ) -> str | None:
         """Begin plotting the first layer. Returns an error message or None if started."""
         if self._job.is_active:
@@ -101,6 +102,7 @@ class MultiLayerPlotService(QObject):
                 fallback_work_area_orientation=fallback_work_area_orientation.value,
                 print_margins=print_margin_model.active_print_margins(print_margins),
                 keep_inside=keep_inside,
+                clip_mode=clip_mode,
                 completed_count=0,
                 message=snapshots[0].name,
             )
@@ -169,6 +171,7 @@ class MultiLayerPlotService(QObject):
             ),
             print_margins=self._job.print_margins,
             keep_inside=self._job.keep_inside,
+            clip_mode=self._job.clip_mode,
             layer_index=self._job.current_index + 1,
             layer_count=self._job.total_layers,
             next_layer_name=next_layer.name if next_layer is not None else None,

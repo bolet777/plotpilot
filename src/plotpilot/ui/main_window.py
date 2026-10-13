@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from plotpilot.models.artwork_transform import ArtworkTransform, resolve_rotation_degrees
-from plotpilot.models.clip_shape import ClipEllipse, ClipRectangle
+from plotpilot.models.clip_shape import ClipEllipse, ClipMode, ClipRectangle
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -797,6 +797,7 @@ class MainWindow(QMainWindow):
             ),
             print_margins=self._settings_service.print_margins,
             keep_inside=self._preview.clip_shape,
+            clip_mode=self._preview.clip_mode,
         )
         if error:
             self._estimate_label.setText(error)
@@ -836,6 +837,7 @@ class MainWindow(QMainWindow):
             ),
             print_margins=self._settings_service.print_margins,
             keep_inside=self._preview.clip_shape,
+            clip_mode=self._preview.clip_mode,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -879,6 +881,7 @@ class MainWindow(QMainWindow):
             ),
             print_margins=self._settings_service.print_margins,
             keep_inside=self._preview.clip_shape,
+            clip_mode=self._preview.clip_mode,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -957,6 +960,7 @@ class MainWindow(QMainWindow):
         saved_shape = (
             session.clip_ellipse if session.clip_ellipse is not None else session.clip_rectangle
         )
+        self._preview.set_clip_mode(session.clip_mode, notify=False)
         self._preview.set_clip_shape(saved_shape, notify=False)
         self._set_artwork_transform(session.artwork_transform, mark_dirty=False)
         self._restore_checked_layer_ids(session.checked_layer_ids)
@@ -1031,6 +1035,7 @@ class MainWindow(QMainWindow):
                 if isinstance(self._preview.clip_shape, ClipEllipse)
                 else None
             ),
+            clip_mode=self._preview.clip_mode,
         )
 
     def _save_project(self) -> None:
@@ -1140,6 +1145,7 @@ class MainWindow(QMainWindow):
             transform.validate()
             self._preview.set_artwork_transform(transform)
             self._preview.set_clip_rectangle(None, notify=False)
+            self._preview.set_clip_mode(ClipMode.KEEP_INSIDE, notify=False)
             self._sync_artwork_controls_from_preview()
         self._preview.fit_view()
         self._document = document
@@ -1240,6 +1246,7 @@ class MainWindow(QMainWindow):
         fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
         print_margins = self._settings_service.print_margins
         keep_inside = self._preview.clip_shape
+        clip_mode = self._preview.clip_mode
         cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
         def operation() -> InteractivePreview:
@@ -1253,6 +1260,7 @@ class MainWindow(QMainWindow):
                 fallback_orientation=fallback_orientation,
                 print_margins=print_margins,
                 keep_inside=keep_inside,
+                clip_mode=clip_mode,
             )
 
         self._preview_compute.submit(operation)

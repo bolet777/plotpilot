@@ -7,7 +7,8 @@ pass.
 **Follow-up status:** Slice 1 (geometry) is frozen in
 `specs/029-rectangle-keep-inside/`. Slice 2 (the clip tool) is frozen in
 `specs/030-clip-rectangle-tool/`. Slice 3 (circle and ellipse keep-inside) is
-frozen in `specs/031-ellipse-keep-inside/`. A plot uses the drawn shape.
+frozen in `specs/031-ellipse-keep-inside/`. Slice 4 (remove-inside) is frozen
+in `specs/032-remove-inside/`. A plot uses the drawn shape and mode.
 
 ## 1. Executive summary
 

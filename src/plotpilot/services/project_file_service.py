@@ -15,6 +15,7 @@ from plotpilot.models.artwork_transform import (
 from plotpilot.models.clip_shape import (
     ClipEllipse,
     ClipEllipseError,
+    ClipMode,
     ClipRectangle,
     ClipRectangleError,
 )
@@ -117,6 +118,8 @@ def session_to_document(
                 "rx_mm": ellipse.rx_mm,
                 "ry_mm": ellipse.ry_mm,
             }
+        if session.clip_mode is ClipMode.REMOVE_INSIDE:
+            clipping["mode"] = ClipMode.REMOVE_INSIDE.value
         document["clipping"] = clipping
     return document
 
@@ -212,7 +215,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         fallback=fallback,
         fallback_orientation=fallback_orientation,
     )
-    clip_rectangle, clip_ellipse = _parse_clipping(data.get("clipping"))
+    clip_rectangle, clip_ellipse, clip_mode = _parse_clipping(data.get("clipping"))
 
     return ProjectSession(
         svg_path=svg_path,
@@ -224,6 +227,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         print_margins=print_margins,
         clip_rectangle=clip_rectangle,
         clip_ellipse=clip_ellipse,
+        clip_mode=clip_mode,
     )
 
 
@@ -324,17 +328,29 @@ def _parse_print_margins(
     return margins
 
 
-def _parse_clipping(block: object) -> tuple[ClipRectangle | None, ClipEllipse | None]:
-    """Missing clipping is no shape. A rectangle block stays compatible with slice 030."""
+def _parse_clipping(
+    block: object,
+) -> tuple[ClipRectangle | None, ClipEllipse | None, ClipMode]:
+    """Missing clipping is no shape. A missing mode stays Keep inside."""
     if block is None:
-        return None, None
+        return None, None, ClipMode.KEEP_INSIDE
     if not isinstance(block, dict):
         raise ProjectFileError("Clipping information in this project file is invalid.")
     rectangle = _parse_clip_rectangle(block.get("rectangle"))
     ellipse = _parse_clip_ellipse(block.get("ellipse"))
     if rectangle is not None and ellipse is not None:
         raise ProjectFileError("Clipping information in this project file is invalid.")
-    return rectangle, ellipse
+    return rectangle, ellipse, _parse_clip_mode(block.get("mode"))
+
+
+def _parse_clip_mode(mode: object) -> ClipMode:
+    if mode is None:
+        return ClipMode.KEEP_INSIDE
+    if mode == ClipMode.KEEP_INSIDE.value:
+        return ClipMode.KEEP_INSIDE
+    if mode == ClipMode.REMOVE_INSIDE.value:
+        return ClipMode.REMOVE_INSIDE
+    raise ProjectFileError("Clipping information in this project file is invalid.")
 
 
 def _parse_clip_rectangle(rectangle: object) -> ClipRectangle | None:
