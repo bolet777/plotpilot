@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipShape
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import PrintMargins
 
@@ -44,7 +44,7 @@ class MultiLayerPlotJob:
     fallback_work_area: str = "A4"
     fallback_work_area_orientation: str = "Portrait"
     print_margins: PrintMargins = field(default_factory=PrintMargins)
-    keep_inside: ClipRectangle | None = None
+    keep_inside: ClipShape | None = None
     completed_count: int = 0
     message: str = ""
     error_detail: str = ""

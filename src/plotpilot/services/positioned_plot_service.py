@@ -9,7 +9,7 @@ from plotpilot.geometry.plot_viewport import (
 )
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipShape
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.services.preview_work_area import (
@@ -28,12 +28,12 @@ def prepare_layer_plot_svg(
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
     fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     print_margins: PrintMargins | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> PreparedPlotSvg:
     """Transform and clip *layer_svg_text* to the printable area inside the viewport.
 
-    ``keep_inside`` limits that clip to the overlap with an axis-aligned
-    rectangle. ``None`` leaves the printable-area clip unchanged.
+    ``keep_inside`` limits that clip to a rectangle overlap or, after the
+    printable clip, to an ellipse. ``None`` leaves the printable-area clip unchanged.
     """
     viewport = resolve_plot_viewport(
         plot_settings,

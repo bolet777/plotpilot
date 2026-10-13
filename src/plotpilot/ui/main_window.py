@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from plotpilot.models.artwork_transform import ArtworkTransform, resolve_rotation_degrees
+from plotpilot.models.clip_shape import ClipEllipse, ClipRectangle
 from plotpilot.models.multi_layer_job import MultiLayerJobState, MultiLayerPlotJob
 from plotpilot.models.plot_bounds import BoundsStatus, PlotBoundsCheck
 from plotpilot.models.plot_job import PlotPhase, PlotState
@@ -795,7 +796,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
-            keep_inside=self._preview.clip_rectangle,
+            keep_inside=self._preview.clip_shape,
         )
         if error:
             self._estimate_label.setText(error)
@@ -834,7 +835,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
-            keep_inside=self._preview.clip_rectangle,
+            keep_inside=self._preview.clip_shape,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -877,7 +878,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
-            keep_inside=self._preview.clip_rectangle,
+            keep_inside=self._preview.clip_shape,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -953,7 +954,10 @@ class MainWindow(QMainWindow):
         self._sync_fallback_combo_from_service()
         self._sync_print_margin_controls()
         self._apply_document(document, reset_transform=False)
-        self._preview.set_clip_rectangle(session.clip_rectangle, notify=False)
+        saved_shape = (
+            session.clip_ellipse if session.clip_ellipse is not None else session.clip_rectangle
+        )
+        self._preview.set_clip_shape(saved_shape, notify=False)
         self._set_artwork_transform(session.artwork_transform, mark_dirty=False)
         self._restore_checked_layer_ids(session.checked_layer_ids)
         self._project_file_path = project_path.resolve()
@@ -1017,7 +1021,16 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
-            clip_rectangle=self._preview.clip_rectangle,
+            clip_rectangle=(
+                self._preview.clip_shape
+                if isinstance(self._preview.clip_shape, ClipRectangle)
+                else None
+            ),
+            clip_ellipse=(
+                self._preview.clip_shape
+                if isinstance(self._preview.clip_shape, ClipEllipse)
+                else None
+            ),
         )
 
     def _save_project(self) -> None:
@@ -1226,7 +1239,7 @@ class MainWindow(QMainWindow):
         fallback = self._settings_service.preview_fallback_work_area
         fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
         print_margins = self._settings_service.print_margins
-        keep_inside = self._preview.clip_rectangle
+        keep_inside = self._preview.clip_shape
         cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
         def operation() -> InteractivePreview:

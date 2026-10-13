@@ -16,7 +16,7 @@ from plotpilot.geometry.plot_viewport import (
 )
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipRectangle, ClipShape
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
@@ -94,7 +94,7 @@ def build_prepared_layer_preview(
     fallback: FallbackWorkArea = FallbackWorkArea.A4,
     fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     print_margins: PrintMargins | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> PreparedLayerPreview:
     """Prepare layer geometry for preview using the plot pipeline."""
     from plotpilot.services.layer_geometry import position_and_clip_geometry, prepare_layer_geometry
@@ -131,9 +131,10 @@ def build_prepared_layer_preview(
     if error_message is None:
         try:
             area = printable_area_for(viewport.width_mm, viewport.height_mm, margins)
+            rectangle = keep_inside if isinstance(keep_inside, ClipRectangle) else None
             window = overlap_clip_rect(
                 ClipRect(area.x_mm, area.y_mm, area.x_max_mm, area.y_max_mm),
-                keep_inside,
+                rectangle,
             )
             if window is None:
                 error_message = "No artwork intersects the plot area."

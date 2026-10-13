@@ -58,7 +58,7 @@ The centre of the window is the machine page:
 
 The **move** tool (✥, on by default) drags the drawing inside the printable area. That drag edits the same X and Y as the Transform sliders. Panning the view does not move the drawing. The move tool is inactive while a plot is running.
 
-The **clip** tool (▭) draws one keep-inside rectangle in machine millimetres. Hold Shift to constrain a square. Drag inside the rectangle to move it, or drag a corner to resize it. Delete or Backspace removes it. The amber rectangle stays on the preview and is saved with the project; it is not part of the plotted drawing. Clip and move are never on at the same time. Zoom, pan, scale, and orientation do not move the rectangle. Strokes are cut to its overlap with the printable area.
+The **clip** tool (▭) draws one keep-inside shape in machine millimetres. Choose a rectangle or an ellipse while the tool is on. Hold Shift to constrain a square or a circle. Drag inside the shape to move it, or drag a handle to resize it. Delete or Backspace removes it. The amber outline stays on the preview and is saved with the project; it is not part of the plotted drawing. Clip and move are never on at the same time. Zoom, pan, scale, and orientation do not move the shape. Strokes are cut to the printable area first, then to the shape.
 
 ## Place the drawing
 
@@ -150,7 +150,7 @@ A project remembers one drawing’s setup:
 - path to the SVG
 - which layers are checked
 - position, scale, and orientation
-- keep-inside rectangle, when one is drawn
+- keep-inside rectangle or ellipse, when one is drawn
 - print margins
 - plot settings
 - fallback work area, when the SVG has no page size
