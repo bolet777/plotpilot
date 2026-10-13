@@ -118,7 +118,22 @@ class PreviewWorkspace(QWidget):
         self.move_button.toggled.connect(self.preview.set_move_tool_active)
         self.move_button.setEnabled(self.preview.transform_controls_enabled)
         self.preview.transform_controls_enabled_changed.connect(self.move_button.setEnabled)
+        self.preview.move_tool_changed.connect(self._sync_move_button)
         self.tools.body.addWidget(self.move_button)
+        self.clip_button = make_tool_button(
+            "▭",
+            "Clip tool: drag a rectangle to keep strokes inside it.\n"
+            "Shift constrains a square. Drag inside to move, corners to resize.\n"
+            "Delete removes it. The rectangle is not plotted.",
+            self.tools,
+        )
+        self.clip_button.setCheckable(True)
+        self.clip_button.setChecked(self.preview.clip_tool_active)
+        self.clip_button.toggled.connect(self.preview.set_clip_tool_active)
+        self.clip_button.setEnabled(self.preview.transform_controls_enabled)
+        self.preview.transform_controls_enabled_changed.connect(self.clip_button.setEnabled)
+        self.preview.clip_tool_changed.connect(self._sync_clip_button)
+        self.tools.body.addWidget(self.clip_button)
         self.zoom_in_button = make_tool_button("＋", "Zoom in (⌘+)", self.tools)
         self.zoom_in_button.clicked.connect(self.preview.zoom_in)
         self.tools.body.addWidget(self.zoom_in_button)
@@ -176,6 +191,16 @@ class PreviewWorkspace(QWidget):
         self._sync_zoom_label()
 
     # ------------------------------------------------------------------ slots
+    def _sync_move_button(self, active: bool) -> None:
+        self.move_button.blockSignals(True)
+        self.move_button.setChecked(active)
+        self.move_button.blockSignals(False)
+
+    def _sync_clip_button(self, active: bool) -> None:
+        self.clip_button.blockSignals(True)
+        self.clip_button.setChecked(active)
+        self.clip_button.blockSignals(False)
+
     def _sync_zoom_label(self) -> None:
         self.zoom_label.setText(f"{int(round(self.preview.view_zoom * 100))}%")
 

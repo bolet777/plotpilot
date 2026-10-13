@@ -75,6 +75,7 @@ Every user-facing capability of V1 and where it lives in V2.
 | Paper / work area, user margins, printable area outline | Paper surface, margin zone, dashed accent printable outline with corner marks | Kept |
 | Faint source-SVG context | Kept (clipped to work area) | Kept |
 | Drag artwork with the mouse to move it (mm) | Move tool (✥, on by default): left-drag edits `ArtworkTransform.x_mm / y_mm` like the Position sliders; mm deltas follow the zoomed scale; inert while the transform is locked (plotting) or when the tool is unchecked | Kept (now the only drag that moves the drawing) |
+| Keep strokes inside a rectangle | Clip tool (▭), mutually exclusive with move. Drag draws one machine-mm rectangle (Shift constrains a square); drag inside to move; corner handles resize; Delete/Backspace removes it. Amber overlay, distinct from the blue printable outline. Saved on the project. Not plotted. | New |
 | Work-area label and plot warnings under the paper | Info chip at the top-left of the canvas | Relocated |
 | Bounds / fit status text | Transform tab → Margins card (`Document … / fits` lines) | Relocated |
 | mm rulers, zoom in/out/fit (`⌘`+wheel), cursor mm readout | Overlays on the canvas + `View` menu (`Ctrl+0`, `⌘+`, `⌘-`) | New, view-only |
@@ -156,3 +157,4 @@ for buttons; `card`, `banner`, `info`, `separator` for frames; `heading`,
 - Hide/show the layers sidebar; preview takes the space.
 - Zoom (buttons, `⌘`+wheel) and middle-drag pan the preview; `Fit` restores; artwork X/Y/scale unchanged.
 - Move tool (✥) checked (default): left-drag moves the drawing; Transform X/Y follow; title shows `*` (dirty). Unchecked: left-drag does nothing. While plotting the ✥ button is disabled and dragging has no effect.
+- Clip tool (▭): drag a rectangle, Shift for a square, move it, resize from corners, Delete to remove it. The move button turns off. The amber outline stays put when zooming or panning. Plotted SVG has no rectangle.

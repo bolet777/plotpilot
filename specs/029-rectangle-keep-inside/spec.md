@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-13
 
-**Status**: Frozen — not user-tested. Geometry only; no in-app validation and no UI.
+**Status**: Frozen — geometry only. The interactive tool is slice 030.
 
 **Input**: User description: "Slice 1 of shape clipping: an optional axis-aligned rectangle in machine millimetres that keeps strokes inside the intersection of that rectangle and the printable area. Original artwork stays unchanged. Preview and plot geometry stay identical. No interactive UI."
 

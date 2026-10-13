@@ -291,6 +291,7 @@ class MainWindow(QMainWindow):
         self._open_svg_empty_button = self._workspace.open_button
         self._preview = self._workspace.preview
         self._preview.artwork_transform_changed.connect(self._on_preview_artwork_dragged)
+        self._preview.clip_rectangle_changed.connect(self._on_clip_rectangle_changed)
         self._preview_prep_timer = QTimer(self)
         self._preview_prep_timer.setSingleShot(True)
         self._preview_prep_timer.setInterval(50)
@@ -794,6 +795,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
+            keep_inside=self._preview.clip_rectangle,
         )
         if error:
             self._estimate_label.setText(error)
@@ -832,6 +834,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
+            keep_inside=self._preview.clip_rectangle,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -874,6 +877,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
+            keep_inside=self._preview.clip_rectangle,
         )
         if error is not None:
             QMessageBox.warning(self, "Cannot plot", error)
@@ -949,6 +953,7 @@ class MainWindow(QMainWindow):
         self._sync_fallback_combo_from_service()
         self._sync_print_margin_controls()
         self._apply_document(document, reset_transform=False)
+        self._preview.set_clip_rectangle(session.clip_rectangle, notify=False)
         self._set_artwork_transform(session.artwork_transform, mark_dirty=False)
         self._restore_checked_layer_ids(session.checked_layer_ids)
         self._project_file_path = project_path.resolve()
@@ -1012,6 +1017,7 @@ class MainWindow(QMainWindow):
                 self._settings_service.preview_fallback_work_area_orientation
             ),
             print_margins=self._settings_service.print_margins,
+            clip_rectangle=self._preview.clip_rectangle,
         )
 
     def _save_project(self) -> None:
@@ -1120,6 +1126,7 @@ class MainWindow(QMainWindow):
             transform = ArtworkTransform.identity()
             transform.validate()
             self._preview.set_artwork_transform(transform)
+            self._preview.set_clip_rectangle(None, notify=False)
             self._sync_artwork_controls_from_preview()
         self._preview.fit_view()
         self._document = document
@@ -1219,6 +1226,7 @@ class MainWindow(QMainWindow):
         fallback = self._settings_service.preview_fallback_work_area
         fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
         print_margins = self._settings_service.print_margins
+        keep_inside = self._preview.clip_rectangle
         cached = self._geometry_cache.lookup(id(document), layer.layer_id)
 
         def operation() -> InteractivePreview:
@@ -1231,6 +1239,7 @@ class MainWindow(QMainWindow):
                 fallback=fallback,
                 fallback_orientation=fallback_orientation,
                 print_margins=print_margins,
+                keep_inside=keep_inside,
             )
 
         self._preview_compute.submit(operation)
@@ -1501,6 +1510,10 @@ class MainWindow(QMainWindow):
         self._schedule_prepared_preview_refresh()
         if mark_dirty:
             self._mark_project_dirty()
+
+    def _on_clip_rectangle_changed(self, _rectangle: object) -> None:
+        self._mark_project_dirty()
+        self._schedule_prepared_preview_refresh()
 
     def _on_preview_artwork_dragged(self, transform: object) -> None:
         if isinstance(transform, ArtworkTransform):

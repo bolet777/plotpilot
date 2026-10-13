@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 from plotpilot.geometry.plot_viewport import PlotViewportError
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
+from plotpilot.models.clip_shape import ClipRectangle
 from plotpilot.models.plot_estimate import PlotEstimate, PreviewEstimateResult
 from plotpilot.models.plot_job import PlotPhase, PlotResult, PlotState, SafeStopResult
 from plotpilot.models.plot_progress import (
@@ -428,6 +429,7 @@ class PlotterService(QObject):
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
         fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
         print_margins: PrintMargins | None = None,
+        keep_inside: ClipRectangle | None = None,
     ) -> str | None:
         """Estimate the final clipped SVG for each layer. Returns an error if refused."""
         if self._plot_in_flight or self._safe_stop_in_flight or self._plot_state.is_active:
@@ -458,6 +460,7 @@ class PlotterService(QObject):
                         fallback=fallback_work_area,
                         fallback_orientation=fallback_work_area_orientation,
                         print_margins=margins,
+                        keep_inside=keep_inside,
                     )
                 except PlotViewportError as exc:
                     results.append((layer.name, None, _short_failure(exc.user_message)))
@@ -486,6 +489,7 @@ class PlotterService(QObject):
         fallback_work_area: FallbackWorkArea = FallbackWorkArea.A4,
         fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
         print_margins: PrintMargins | None = None,
+        keep_inside: ClipRectangle | None = None,
         layer_index: int | None = None,
         layer_count: int | None = None,
         next_layer_name: str | None = None,
@@ -535,6 +539,7 @@ class PlotterService(QObject):
                     fallback=fallback_work_area,
                     fallback_orientation=fallback_work_area_orientation,
                     print_margins=margins,
+                    keep_inside=keep_inside,
                 )
             except PlotViewportError as exc:
                 return PlotResult(success=False, message=exc.user_message)

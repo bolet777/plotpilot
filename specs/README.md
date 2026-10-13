@@ -46,7 +46,8 @@ specs/NNN-short-name/
 | 026 | [modern-transform-controls](026-modern-transform-controls/) | Slider-based X/Y/scale panel synced with preview drag |
 | 027 | [window-resize-and-scroll](027-window-resize-and-scroll/) | Resizable window; page scrolls when the layout does not fit |
 | 028 | [print-margins](028-print-margins/) | Editable safe print margins inside the physical work area |
-| 029 | [rectangle-keep-inside](029-rectangle-keep-inside/) | Optional keep-inside rectangle on the printable area. **Frozen, not user-tested.** Geometry only; the app does not expose it yet. |
+| 029 | [rectangle-keep-inside](029-rectangle-keep-inside/) | Optional keep-inside rectangle on the printable area. Geometry only. |
+| 030 | [clip-rectangle-tool](030-clip-rectangle-tool/) | Interactive clip rectangle on the preview, wired through plot, estimate, and the project file. **Frozen.** |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

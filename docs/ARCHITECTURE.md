@@ -140,7 +140,8 @@ ActionBar                    status strip · progress · pen-change banner · bu
 | 026 | Slider transform panel synced with preview drag |
 | 027 | Resizable window; properties scroll and the action bar wraps |
 | 028 | Editable print margins and a shared printable rectangle |
-| 029 | Optional keep-inside rectangle (frozen, not user-tested; no UI yet) |
+| 029 | Optional keep-inside rectangle on the printable area (geometry) |
+| 030 | Interactive clip rectangle (frozen): preview tool, plot, estimate, project file |
 
 ## Platform notes
 

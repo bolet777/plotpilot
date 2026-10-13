@@ -12,9 +12,14 @@ Mouse model:
   so the drawing follows the cursor at any zoom. When the move tool is off a
   left-drag does nothing (no accidental nudges while inspecting). It is also
   inert while transform controls are locked (plotting).
+* **Clip tool** — mutually exclusive with the move tool. Left-drag draws one
+  keep-inside rectangle in machine millimetres (Shift constrains a square).
+  Drag inside the rectangle to move it; drag a corner to resize it. Delete or
+  Backspace removes it. The rectangle is an overlay, not a plotted stroke.
+  Zoom, pan, and the artwork transform do not move it.
 * **View pan (navigation only)** — middle-drag, and plain wheel scrolling when
-  the view is not at "fit". Never touches the artwork transform; ``fit_view``
-  resets it together with the zoom.
+  the view is not at "fit". Never touches the artwork transform or the clip
+  rectangle; ``fit_view`` resets the view together with the zoom.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
     QPen,
@@ -43,6 +49,7 @@ from plotpilot.models.artwork_transform import (
     oriented_page_size,
     resolve_rotation_degrees,
 )
+from plotpilot.models.clip_shape import ClipRectangle, drag_rectangle, translate_rectangle
 from plotpilot.models.print_margins import PrintableArea
 from plotpilot.services.preview_work_area import (
     PhysicalPreviewLayout,
@@ -180,7 +187,11 @@ class LayerPreviewWidget(QWidget):
     _GHOST_OPACITY = 0.18
     _GHOST_OPACITY_PENDING = 0.45
     _CONTEXT_PIXMAP_MAX_PX = 8192
+    _CLIP_HANDLE_PX = 8.0
     artwork_transform_changed = Signal(object)
+    clip_rectangle_changed = Signal(object)
+    clip_tool_changed = Signal(bool)
+    move_tool_changed = Signal(bool)
     view_changed = Signal()
     cursor_mm_changed = Signal(object)
     transform_controls_enabled_changed = Signal(bool)
@@ -207,6 +218,14 @@ class LayerPreviewWidget(QWidget):
         self._pan_last_px: QPointF | None = None
         # Hand/move tool: on by default so a plain left-drag moves the drawing (V1).
         self._move_tool = True
+        self._clip_tool = False
+        self._clip_rectangle: ClipRectangle | None = None
+        self._clip_gesture: str | None = None
+        self._clip_anchor_mm: tuple[float, float] | None = None
+        self._clip_press_rect: ClipRectangle | None = None
+        self._clip_move_origin_mm: tuple[float, float] | None = None
+        self._clip_move_origin_rect: ClipRectangle | None = None
+        self._clip_pointer_px: QPointF | None = None
         self._view_zoom = 1.0
         self._view_pan_px = QPointF(0.0, 0.0)
         self._show_rulers = True
@@ -446,6 +465,7 @@ class LayerPreviewWidget(QWidget):
         if not enabled:
             self._dragging = False
             self._drag_last_px = None
+            self._end_clip_gesture()
         self._update_cursor()
         if changed:
             self.transform_controls_enabled_changed.emit(enabled)
@@ -488,11 +508,53 @@ class LayerPreviewWidget(QWidget):
         return self._move_tool
 
     def set_move_tool_active(self, active: bool) -> None:
+        active = bool(active)
+        if active and self._clip_tool:
+            self.set_clip_tool_active(False)
+        if active == self._move_tool:
+            return
         self._move_tool = active
         if not active:
             self._dragging = False
             self._drag_last_px = None
         self._update_cursor()
+        self.move_tool_changed.emit(active)
+
+    # ----------------------------------------------------------------- clip tool
+    @property
+    def clip_tool_active(self) -> bool:
+        """True when a left-drag edits the keep-inside rectangle."""
+        return self._clip_tool
+
+    def set_clip_tool_active(self, active: bool) -> None:
+        active = bool(active)
+        if active and self._move_tool:
+            self.set_move_tool_active(False)
+        if active == self._clip_tool:
+            return
+        self._clip_tool = active
+        if not active:
+            self._end_clip_gesture()
+        else:
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._update_cursor()
+        self.update()
+        self.clip_tool_changed.emit(active)
+
+    @property
+    def clip_rectangle(self) -> ClipRectangle | None:
+        return self._clip_rectangle
+
+    def set_clip_rectangle(self, rectangle: ClipRectangle | None, *, notify: bool = True) -> None:
+        """Store the keep-inside rectangle. ``notify`` is false while loading a project."""
+        if rectangle is not None:
+            rectangle.validate()
+        if rectangle == self._clip_rectangle:
+            return
+        self._clip_rectangle = rectangle
+        self.update()
+        if notify:
+            self.clip_rectangle_changed.emit(rectangle)
 
     # ---------------------------------------------------------------- view API
     @property
@@ -848,6 +910,12 @@ class LayerPreviewWidget(QWidget):
             self._update_cursor()
             event.accept()
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._begin_clip_gesture(
+            event.position()
+        ):
+            self._update_cursor()
+            event.accept()
+            return
         # Left button with the move tool: drag the drawing (ArtworkTransform x/y).
         if event.button() != Qt.MouseButton.LeftButton or not self._can_move_artwork():
             super().mousePressEvent(event)
@@ -865,12 +933,24 @@ class LayerPreviewWidget(QWidget):
             and self._physical is not None
         )
 
+    def _can_edit_clip(self) -> bool:
+        return (
+            self._clip_tool
+            and self._transform_controls_enabled
+            and self._message is None
+            and self._physical is not None
+        )
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self.cursor_mm_changed.emit(self.widget_to_mm(event.position()))
         if self._panning and self._pan_last_px is not None:
             delta = event.position() - self._pan_last_px
             self._pan_last_px = event.position()
             self.pan_by(delta)
+            event.accept()
+            return
+        if self._clip_gesture is not None:
+            self._update_clip_gesture(event.position(), event.modifiers())
             event.accept()
             return
         if not self._dragging or self._drag_last_px is None:
@@ -895,6 +975,11 @@ class LayerPreviewWidget(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._clip_gesture is not None:
+            self._end_clip_gesture()
+            self._update_cursor()
+            event.accept()
+            return
         if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             self._dragging = False
             self._drag_last_px = None
@@ -902,6 +987,42 @@ class LayerPreviewWidget(QWidget):
             self._pan_last_px = None
             self._update_cursor()
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if (
+            self._clip_tool
+            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and not event.isAutoRepeat()
+        ):
+            if self._clip_rectangle is not None:
+                self.set_clip_rectangle(None)
+            event.accept()
+            return
+        if (
+            self._clip_gesture in ("draw", "resize")
+            and event.key() == Qt.Key.Key_Shift
+            and self._clip_pointer_px is not None
+        ):
+            self._update_clip_gesture(
+                self._clip_pointer_px,
+                event.modifiers() | Qt.KeyboardModifier.ShiftModifier,
+            )
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if (
+            self._clip_gesture in ("draw", "resize")
+            and event.key() == Qt.Key.Key_Shift
+            and not event.isAutoRepeat()
+            and self._clip_pointer_px is not None
+        ):
+            modifiers = event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier
+            self._update_clip_gesture(self._clip_pointer_px, modifiers)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self.cursor_mm_changed.emit(None)
@@ -935,10 +1056,163 @@ class LayerPreviewWidget(QWidget):
         """Cursor affordance: hand = view pan (middle button), 4-way arrow = move drawing."""
         if self._panning:
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif self._clip_gesture == "resize":
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._clip_gesture == "move" or (
+            self._can_edit_clip() and self._clip_rectangle is not None
+        ):
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        elif self._can_edit_clip():
+            self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._dragging or self._can_move_artwork():
             self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.unsetCursor()
+
+    def _clip_bounds_mm(self) -> tuple[float, float, float, float] | None:
+        """Printable rectangle in machine mm, falling back to the work area."""
+        physical = self._physical
+        if physical is None:
+            return None
+        area = physical.printable_area
+        if area is not None and area.width_mm > 0 and area.height_mm > 0:
+            return (
+                area.x_mm,
+                area.y_mm,
+                area.x_mm + area.width_mm,
+                area.y_mm + area.height_mm,
+            )
+        work = physical.work_area
+        if work.width_mm <= 0 or work.height_mm <= 0:
+            return None
+        return (0.0, 0.0, work.width_mm, work.height_mm)
+
+    def _mm_to_widget(self, x_mm: float, y_mm: float) -> QPointF | None:
+        layout = self._current_physical_layout()
+        if layout is None or layout.mm_to_px <= 0:
+            return None
+        return QPointF(
+            layout.workspace_x_px + x_mm * layout.mm_to_px,
+            layout.workspace_y_px + y_mm * layout.mm_to_px,
+        )
+
+    def _clip_corners_mm(self, rectangle: ClipRectangle) -> dict[str, tuple[float, float]]:
+        return {
+            "nw": (rectangle.x_mm, rectangle.y_mm),
+            "ne": (rectangle.x_max_mm, rectangle.y_mm),
+            "sw": (rectangle.x_mm, rectangle.y_max_mm),
+            "se": (rectangle.x_max_mm, rectangle.y_max_mm),
+        }
+
+    def _hit_clip_corner(self, point_px: QPointF) -> str | None:
+        rectangle = self._clip_rectangle
+        if rectangle is None:
+            return None
+        best: str | None = None
+        best_distance = self._CLIP_HANDLE_PX
+        for name, (x_mm, y_mm) in self._clip_corners_mm(rectangle).items():
+            corner = self._mm_to_widget(x_mm, y_mm)
+            if corner is None:
+                return None
+            distance = math.hypot(point_px.x() - corner.x(), point_px.y() - corner.y())
+            if distance <= best_distance:
+                best = name
+                best_distance = distance
+        return best
+
+    def _point_in_clip(self, point_px: QPointF) -> bool:
+        rectangle = self._clip_rectangle
+        mm = self.widget_to_mm(point_px)
+        if rectangle is None or mm is None:
+            return False
+        x, y = mm
+        inside_x = rectangle.x_mm <= x <= rectangle.x_max_mm
+        inside_y = rectangle.y_mm <= y <= rectangle.y_max_mm
+        return inside_x and inside_y
+
+    def _opposite_corner(self, rectangle: ClipRectangle, corner: str) -> tuple[float, float]:
+        corners = self._clip_corners_mm(rectangle)
+        opposite = {"nw": "se", "ne": "sw", "sw": "ne", "se": "nw"}
+        return corners[opposite[corner]]
+
+    def _begin_clip_gesture(self, point_px: QPointF) -> bool:
+        if not self._can_edit_clip():
+            return False
+        bounds = self._clip_bounds_mm()
+        mm = self.widget_to_mm(point_px)
+        if bounds is None or mm is None:
+            return False
+        x, y = mm
+        x_min, y_min, x_max, y_max = bounds
+        if not (x_min <= x <= x_max and y_min <= y <= y_max):
+            return False
+        self._clip_pointer_px = QPointF(point_px)
+        self._clip_press_rect = self._clip_rectangle
+        corner = self._hit_clip_corner(point_px)
+        if corner is not None and self._clip_rectangle is not None:
+            self._clip_gesture = "resize"
+            self._clip_anchor_mm = self._opposite_corner(self._clip_rectangle, corner)
+            return True
+        if self._clip_rectangle is not None and self._point_in_clip(point_px):
+            self._clip_gesture = "move"
+            self._clip_move_origin_mm = (x, y)
+            self._clip_move_origin_rect = self._clip_rectangle
+            return True
+        self._clip_gesture = "draw"
+        self._clip_anchor_mm = (x, y)
+        return True
+
+    def _update_clip_gesture(self, point_px: QPointF, modifiers: Qt.KeyboardModifier) -> None:
+        self._clip_pointer_px = QPointF(point_px)
+        bounds = self._clip_bounds_mm()
+        mm = self.widget_to_mm(point_px)
+        if bounds is None or mm is None or self._clip_gesture is None:
+            return
+        x_min, y_min, x_max, y_max = bounds
+        square = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        if (
+            self._clip_gesture == "move"
+            and self._clip_move_origin_mm is not None
+            and self._clip_move_origin_rect is not None
+        ):
+            origin_x, origin_y = self._clip_move_origin_mm
+            result = translate_rectangle(
+                self._clip_move_origin_rect,
+                mm[0] - origin_x,
+                mm[1] - origin_y,
+                x_min=x_min,
+                y_min=y_min,
+                x_max=x_max,
+                y_max=y_max,
+            )
+        elif self._clip_anchor_mm is not None:
+            anchor_x, anchor_y = self._clip_anchor_mm
+            result = drag_rectangle(
+                anchor_x,
+                anchor_y,
+                mm[0],
+                mm[1],
+                square=square,
+                x_min=x_min,
+                y_min=y_min,
+                x_max=x_max,
+                y_max=y_max,
+            )
+        else:
+            return
+        if result is None:
+            if self._clip_gesture == "draw":
+                self.set_clip_rectangle(self._clip_press_rect)
+            return
+        self.set_clip_rectangle(result)
+
+    def _end_clip_gesture(self) -> None:
+        self._clip_gesture = None
+        self._clip_anchor_mm = None
+        self._clip_press_rect = None
+        self._clip_move_origin_mm = None
+        self._clip_move_origin_rect = None
+        self._clip_pointer_px = None
 
     # ------------------------------------------------------------ physical
     def _paint_physical_preview(self, painter: QPainter, layout: PhysicalPreviewLayout) -> None:
@@ -1021,6 +1295,7 @@ class LayerPreviewWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(work_target)
             self._paint_printable_boundary(painter, scale_px)
+            self._paint_clip_overlay(painter, scale_px)
 
         painter.restore()
 
@@ -1063,6 +1338,40 @@ class LayerPreviewWidget(QWidget):
             painter.drawLine(QPointF(cx, cy), QPointF(cx + sx * arm, cy))
             painter.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * arm))
         self._painted_printable_boundary = True
+
+    def _paint_clip_overlay(self, painter: QPainter, scale_px: float) -> None:
+        """Amber keep-inside rectangle. Handles appear only while the clip tool is on."""
+        rectangle = self._clip_rectangle
+        if rectangle is None or scale_px <= 0:
+            return
+        rect = QRectF(
+            rectangle.x_mm * scale_px,
+            rectangle.y_mm * scale_px,
+            rectangle.width_mm * scale_px,
+            rectangle.height_mm * scale_px,
+        )
+        fill = QColor(COLORS.clip_outline)
+        fill.setAlpha(36)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRect(rect)
+        pen = QPen(QColor(COLORS.clip_outline))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setWidthF(1.6)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+        if not self._clip_tool:
+            return
+        handle = 7.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(COLORS.clip_outline))
+        for x_mm, y_mm in self._clip_corners_mm(rectangle).values():
+            center = QPointF(x_mm * scale_px, y_mm * scale_px)
+            painter.drawRect(
+                QRectF(center.x() - handle / 2, center.y() - handle / 2, handle, handle)
+            )
 
     def _paint_geometry_context(
         self,
