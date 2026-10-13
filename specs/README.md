@@ -49,7 +49,7 @@ specs/NNN-short-name/
 | 029 | [rectangle-keep-inside](029-rectangle-keep-inside/) | Optional keep-inside rectangle on the printable area. Geometry only. |
 | 030 | [clip-rectangle-tool](030-clip-rectangle-tool/) | Interactive clip rectangle on the preview, wired through plot, estimate, and the project file. **Frozen.** |
 | 031 | [ellipse-keep-inside](031-ellipse-keep-inside/) | Circle and ellipse keep-inside on the clip tool. Shift draws a circle. **Frozen.** |
-| 032 | [remove-inside](032-remove-inside/) | Remove-inside holes for the rectangle, circle, and ellipse clip. |
+| 032 | [remove-inside](032-remove-inside/) | Remove-inside holes for the rectangle, circle, and ellipse clip. **Frozen.** |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

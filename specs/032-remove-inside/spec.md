@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-13
 
-**Status**: Implemented on `032-remove-inside`. Not merged.
+**Status**: Frozen. Pytest, ruff, and a driven main-window pass were run before the merge. Not a user sign-off.
 
 **Input**: Slice 4 of shape clipping. Remove the inside of the current rectangle or ellipse. Keep inside stays the default, including the rectangle fast path.
 
