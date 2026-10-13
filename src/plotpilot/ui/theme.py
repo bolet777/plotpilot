@@ -48,6 +48,7 @@ class ThemeColors:
     paper_shadow: str = "#0a0a0b"
     margin_zone: str = "#d9d9d6"
     printable_outline: str = "#2f7df6"
+    clip_outline: str = "#f0a63a"
     work_area_outline: str = "#7a7a80"
     artwork_ink: str = "#111111"
     ruler_bg: str = "#1f1f22"

@@ -1,6 +1,8 @@
 # Implementation notes: Rectangle keep-inside clip
 
-**Status: frozen, not user-tested.** Slice 1 is kept as a snapshot. It has not been validated in the application. There is no drawing tool, so the running app never passes a rectangle and still clips only to the printable area. Automated pytest and ruff were run once while the slice was written; that is not a substitute for using the feature.
+Slice 2 (`030-clip-rectangle-tool`) now draws this rectangle in the app and passes it through preview, plot, estimate, and the project file. The notes below still describe the geometry slice only.
+
+**Status: geometry slice, frozen as written.** Slice 1 did not include a drawing tool. Automated pytest and ruff were run once while the slice was written; that is not a substitute for using the feature.
 
 Slice 1 only. No preview drawing, no project-file field, and no new dependency.
 

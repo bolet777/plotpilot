@@ -58,6 +58,8 @@ The centre of the window is the machine page:
 
 The **move** tool (✥, on by default) drags the drawing inside the printable area. That drag edits the same X and Y as the Transform sliders. Panning the view does not move the drawing. The move tool is inactive while a plot is running.
 
+The **clip** tool (▭) draws one keep-inside rectangle in machine millimetres. Hold Shift to constrain a square. Drag inside the rectangle to move it, or drag a corner to resize it. Delete or Backspace removes it. The amber rectangle stays on the preview and is saved with the project; it is not part of the plotted drawing. Clip and move are never on at the same time. Zoom, pan, scale, and orientation do not move the rectangle. Strokes are cut to its overlap with the printable area.
+
 ## Place the drawing
 
 Open the **Transform** tab (**⌘1**).
@@ -139,7 +141,7 @@ Check every layer that should be part of the job, then **Plot Checked Layers**. 
 
 ### Estimate first
 
-**Estimate** runs the same prepared geometry the plot would use, including clipping to the printable area, and prints a duration on the status line. Checked layers are included when any box is checked; otherwise the selected layer is measured. The command is an offline preview (`axicli` with `-v -T`) and does not move the plotter. Change margins, scale, or speed and estimate again; the number follows the current setup.
+**Estimate** runs the same prepared geometry the plot would use, including clipping to the printable area and to a keep-inside rectangle when one is drawn, and prints a duration on the status line. Checked layers are included when any box is checked; otherwise the selected layer is measured. The command is an offline preview (`axicli` with `-v -T`) and does not move the plotter. Change margins, scale, or speed and estimate again; the number follows the current setup.
 
 ## Projects
 
@@ -148,6 +150,7 @@ A project remembers one drawing’s setup:
 - path to the SVG
 - which layers are checked
 - position, scale, and orientation
+- keep-inside rectangle, when one is drawn
 - print margins
 - plot settings
 - fallback work area, when the SVG has no page size

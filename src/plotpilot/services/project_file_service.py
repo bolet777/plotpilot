@@ -12,6 +12,7 @@ from plotpilot.models.artwork_transform import (
     ArtworkTransformError,
     parse_artwork_orientation,
 )
+from plotpilot.models.clip_shape import ClipRectangle, ClipRectangleError
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError
 from plotpilot.models.project_session import ProjectSession
@@ -63,7 +64,7 @@ def session_to_document(
     project_file = project_file.resolve()
     stored_svg = serialize_svg_path(project_file, session.svg_path)
     settings = session.plot_settings
-    return {
+    document: dict[str, Any] = {
         "format": FORMAT_ID,
         "version": SUPPORTED_VERSION,
         "svg": {"path": stored_svg},
@@ -93,6 +94,17 @@ def session_to_document(
             "margin_vertical_mm": session.print_margins.vertical_mm,
         },
     }
+    rectangle = session.clip_rectangle
+    if rectangle is not None:
+        document["clipping"] = {
+            "rectangle": {
+                "x_mm": rectangle.x_mm,
+                "y_mm": rectangle.y_mm,
+                "width_mm": rectangle.width_mm,
+                "height_mm": rectangle.height_mm,
+            }
+        }
+    return document
 
 
 def write_project_file(project_file: Path, session: ProjectSession) -> None:
@@ -195,6 +207,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         fallback_work_area=fallback,
         fallback_work_area_orientation=fallback_orientation,
         print_margins=print_margins,
+        clip_rectangle=_parse_clip_rectangle(data.get("clipping")),
     )
 
 
@@ -293,6 +306,30 @@ def _parse_print_margins(
     except PrintMarginsError as exc:
         raise ProjectFileError(exc.user_message) from exc
     return margins
+
+
+def _parse_clip_rectangle(block: object) -> ClipRectangle | None:
+    """Missing clipping is no rectangle. A present block must be a valid rectangle."""
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise ProjectFileError("Clipping information in this project file is invalid.")
+    rectangle = block.get("rectangle")
+    if rectangle is None:
+        return None
+    if not isinstance(rectangle, dict):
+        raise ProjectFileError("Clipping information in this project file is invalid.")
+    try:
+        parsed = ClipRectangle(
+            x_mm=_required_float(rectangle["x_mm"]),
+            y_mm=_required_float(rectangle["y_mm"]),
+            width_mm=_required_float(rectangle["width_mm"]),
+            height_mm=_required_float(rectangle["height_mm"]),
+        )
+        parsed.validate()
+    except (KeyError, TypeError, ValueError, ClipRectangleError) as exc:
+        raise ProjectFileError("Clipping information in this project file is invalid.") from exc
+    return parsed
 
 
 def _required_float(value: object) -> float:
