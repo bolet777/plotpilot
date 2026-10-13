@@ -16,6 +16,7 @@ from plotpilot.models.artwork_transform import (
     orient_point,
     resolve_rotation_degrees,
 )
+from plotpilot.models.clip_shape import ClipRectangle
 from plotpilot.svg.page_geometry import SvgPageGeometry, parse_page_geometry
 from plotpilot.svg.plot_dimensions import PlotDimensionError
 
@@ -79,6 +80,7 @@ def clip_document_polylines(
     clip_y_max_mm: float | None = None,
     page_width_mm: float | None = None,
     page_height_mm: float | None = None,
+    keep_inside: ClipRectangle | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Place document polylines and clip them to an arbitrary machine rectangle.
 
@@ -86,6 +88,9 @@ def clip_document_polylines(
     pass the printable-area edges so margins do not shift machine coordinates.
     ``page_width_mm`` / ``page_height_mm`` are required when the transform
     orientation is not ``PRESERVED`` (the page is rotated about its own size).
+    ``keep_inside`` further limits that window to the overlap with an
+    axis-aligned rectangle. ``None`` leaves the printable window unchanged.
+    A rectangle that does not overlap the window yields no polylines.
     """
     transform.validate()
     clip = _resolve_clip_rect(
@@ -96,10 +101,13 @@ def clip_document_polylines(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
+    overlap = overlap_clip_rect(clip, keep_inside)
+    if overlap is None:
+        return []
     return _clip_document_subpaths(
         polylines,
         transform,
-        clip,
+        overlap,
         page_width_mm=page_width_mm,
         page_height_mm=page_height_mm,
     )
@@ -115,6 +123,7 @@ def prepare_positioned_plot_svg(
     clip_y_min_mm: float = 0.0,
     clip_x_max_mm: float | None = None,
     clip_y_max_mm: float | None = None,
+    keep_inside: ClipRectangle | None = None,
 ) -> PreparedPlotSvg:
     """Return clipped plot SVG in machine coordinates (1 unit = 1 mm)."""
     transform.validate()
@@ -126,23 +135,29 @@ def prepare_positioned_plot_svg(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
+    overlap = overlap_clip_rect(clip, keep_inside)
     flattened = flatten_document_geometry(svg_text)
-    clipped_paths = _clip_document_subpaths(
-        flattened.polylines,
-        transform,
-        clip,
-        page_width_mm=flattened.page_width_mm,
-        page_height_mm=flattened.page_height_mm,
-    )
+    if overlap is None:
+        clipped_paths: list[tuple[tuple[float, float], ...]] = []
+        active = clip
+    else:
+        clipped_paths = _clip_document_subpaths(
+            flattened.polylines,
+            transform,
+            overlap,
+            page_width_mm=flattened.page_width_mm,
+            page_height_mm=flattened.page_height_mm,
+        )
+        active = overlap
 
     return emit_validated_plot_svg(
         clipped_paths,
         viewport_width_mm=viewport_width_mm,
         viewport_height_mm=viewport_height_mm,
-        clip_x_min_mm=clip.x_min,
-        clip_y_min_mm=clip.y_min,
-        clip_x_max_mm=clip.x_max,
-        clip_y_max_mm=clip.y_max,
+        clip_x_min_mm=active.x_min,
+        clip_y_min_mm=active.y_min,
+        clip_x_max_mm=active.x_max,
+        clip_y_max_mm=active.y_max,
     )
 
 
@@ -200,6 +215,24 @@ def _resolve_clip_rect(
         msg = "Print margins leave no printable area."
         raise PlotViewportError(msg)
     return ClipRect(clip_x_min_mm, clip_y_min_mm, x_max, y_max)
+
+
+def overlap_clip_rect(printable: ClipRect, keep_inside: ClipRectangle | None) -> ClipRect | None:
+    """Intersect *keep_inside* with the printable window.
+
+    ``None`` means no extra window. A non-positive overlap (including a shared
+    edge with no area) means the keep-inside rectangle misses the printable area.
+    """
+    if keep_inside is None:
+        return printable
+    keep_inside.validate()
+    x_min = max(printable.x_min, keep_inside.x_mm)
+    y_min = max(printable.y_min, keep_inside.y_mm)
+    x_max = min(printable.x_max, keep_inside.x_max_mm)
+    y_max = min(printable.y_max, keep_inside.y_max_mm)
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return ClipRect(x_min, y_min, x_max, y_max)
 
 
 def _validate_emitted_svg(
