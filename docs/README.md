@@ -9,7 +9,7 @@
 ## Contributors
 
 - [Architecture](ARCHITECTURE.md) — modules, data flows, and how the UI is composed
-- [Shape-clipping feasibility](investigations/shape-clipping-feasibility.md) — study; slices 029 and 030 (rectangle keep-inside) are frozen
+- [Shape-clipping feasibility](investigations/shape-clipping-feasibility.md) — study; slices 029–031 (rectangle, circle, and ellipse keep-inside) are frozen
 - [UI V2](UI-V2.md) — layout, theme hooks, and where each control lives
 - [Tests](testing.md) — fast, full, and hardware pytest loops
 - [Test layout](../tests/README.md) — conventions and coverage map

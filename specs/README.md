@@ -48,6 +48,7 @@ specs/NNN-short-name/
 | 028 | [print-margins](028-print-margins/) | Editable safe print margins inside the physical work area |
 | 029 | [rectangle-keep-inside](029-rectangle-keep-inside/) | Optional keep-inside rectangle on the printable area. Geometry only. |
 | 030 | [clip-rectangle-tool](030-clip-rectangle-tool/) | Interactive clip rectangle on the preview, wired through plot, estimate, and the project file. **Frozen.** |
+| 031 | [ellipse-keep-inside](031-ellipse-keep-inside/) | Circle and ellipse keep-inside on the clip tool. Shift draws a circle. **Frozen.** |
 
 Branch naming: `NNN-slug` (e.g. `010-macos-app-bundle`).
 

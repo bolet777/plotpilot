@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipShape
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import (
     PrintableArea,
@@ -61,7 +61,7 @@ def compute_interactive_preview(
     fallback: FallbackWorkArea,
     fallback_orientation: WorkAreaOrientation,
     print_margins: PrintMargins | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> InteractivePreview:
     """Flatten only when *cached_geometry* is missing, then clip. No Qt."""
     geometry = cached_geometry

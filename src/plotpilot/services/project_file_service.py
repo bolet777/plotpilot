@@ -12,7 +12,12 @@ from plotpilot.models.artwork_transform import (
     ArtworkTransformError,
     parse_artwork_orientation,
 )
-from plotpilot.models.clip_shape import ClipRectangle, ClipRectangleError
+from plotpilot.models.clip_shape import (
+    ClipEllipse,
+    ClipEllipseError,
+    ClipRectangle,
+    ClipRectangleError,
+)
 from plotpilot.models.plot_settings import PlotSettings, PlotSettingsValidationError
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError
 from plotpilot.models.project_session import ProjectSession
@@ -95,15 +100,24 @@ def session_to_document(
         },
     }
     rectangle = session.clip_rectangle
-    if rectangle is not None:
-        document["clipping"] = {
-            "rectangle": {
+    ellipse = session.clip_ellipse
+    if rectangle is not None or ellipse is not None:
+        clipping: dict[str, Any] = {}
+        if rectangle is not None:
+            clipping["rectangle"] = {
                 "x_mm": rectangle.x_mm,
                 "y_mm": rectangle.y_mm,
                 "width_mm": rectangle.width_mm,
                 "height_mm": rectangle.height_mm,
             }
-        }
+        if ellipse is not None:
+            clipping["ellipse"] = {
+                "cx_mm": ellipse.cx_mm,
+                "cy_mm": ellipse.cy_mm,
+                "rx_mm": ellipse.rx_mm,
+                "ry_mm": ellipse.ry_mm,
+            }
+        document["clipping"] = clipping
     return document
 
 
@@ -198,6 +212,7 @@ def read_project_file(project_file: Path) -> ProjectSession:
         fallback=fallback,
         fallback_orientation=fallback_orientation,
     )
+    clip_rectangle, clip_ellipse = _parse_clipping(data.get("clipping"))
 
     return ProjectSession(
         svg_path=svg_path,
@@ -207,7 +222,8 @@ def read_project_file(project_file: Path) -> ProjectSession:
         fallback_work_area=fallback,
         fallback_work_area_orientation=fallback_orientation,
         print_margins=print_margins,
-        clip_rectangle=_parse_clip_rectangle(data.get("clipping")),
+        clip_rectangle=clip_rectangle,
+        clip_ellipse=clip_ellipse,
     )
 
 
@@ -308,13 +324,20 @@ def _parse_print_margins(
     return margins
 
 
-def _parse_clip_rectangle(block: object) -> ClipRectangle | None:
-    """Missing clipping is no rectangle. A present block must be a valid rectangle."""
+def _parse_clipping(block: object) -> tuple[ClipRectangle | None, ClipEllipse | None]:
+    """Missing clipping is no shape. A rectangle block stays compatible with slice 030."""
     if block is None:
-        return None
+        return None, None
     if not isinstance(block, dict):
         raise ProjectFileError("Clipping information in this project file is invalid.")
-    rectangle = block.get("rectangle")
+    rectangle = _parse_clip_rectangle(block.get("rectangle"))
+    ellipse = _parse_clip_ellipse(block.get("ellipse"))
+    if rectangle is not None and ellipse is not None:
+        raise ProjectFileError("Clipping information in this project file is invalid.")
+    return rectangle, ellipse
+
+
+def _parse_clip_rectangle(rectangle: object) -> ClipRectangle | None:
     if rectangle is None:
         return None
     if not isinstance(rectangle, dict):
@@ -328,6 +351,24 @@ def _parse_clip_rectangle(block: object) -> ClipRectangle | None:
         )
         parsed.validate()
     except (KeyError, TypeError, ValueError, ClipRectangleError) as exc:
+        raise ProjectFileError("Clipping information in this project file is invalid.") from exc
+    return parsed
+
+
+def _parse_clip_ellipse(ellipse: object) -> ClipEllipse | None:
+    if ellipse is None:
+        return None
+    if not isinstance(ellipse, dict):
+        raise ProjectFileError("Clipping information in this project file is invalid.")
+    try:
+        parsed = ClipEllipse(
+            cx_mm=_required_float(ellipse["cx_mm"]),
+            cy_mm=_required_float(ellipse["cy_mm"]),
+            rx_mm=_required_float(ellipse["rx_mm"]),
+            ry_mm=_required_float(ellipse["ry_mm"]),
+        )
+        parsed.validate()
+    except (KeyError, TypeError, ValueError, ClipEllipseError) as exc:
         raise ProjectFileError("Clipping information in this project file is invalid.") from exc
     return parsed
 

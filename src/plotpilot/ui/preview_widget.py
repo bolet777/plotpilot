@@ -49,7 +49,16 @@ from plotpilot.models.artwork_transform import (
     oriented_page_size,
     resolve_rotation_degrees,
 )
-from plotpilot.models.clip_shape import ClipRectangle, drag_rectangle, translate_rectangle
+from plotpilot.models.clip_shape import (
+    ClipEllipse,
+    ClipRectangle,
+    ClipShape,
+    drag_rectangle,
+    ellipse_from_rectangle,
+    resize_ellipse,
+    translate_ellipse,
+    translate_rectangle,
+)
 from plotpilot.models.print_margins import PrintableArea
 from plotpilot.services.preview_work_area import (
     PhysicalPreviewLayout,
@@ -190,6 +199,7 @@ class LayerPreviewWidget(QWidget):
     _CLIP_HANDLE_PX = 8.0
     artwork_transform_changed = Signal(object)
     clip_rectangle_changed = Signal(object)
+    clip_kind_changed = Signal(str)
     clip_tool_changed = Signal(bool)
     move_tool_changed = Signal(bool)
     view_changed = Signal()
@@ -219,12 +229,14 @@ class LayerPreviewWidget(QWidget):
         # Hand/move tool: on by default so a plain left-drag moves the drawing (V1).
         self._move_tool = True
         self._clip_tool = False
-        self._clip_rectangle: ClipRectangle | None = None
+        self._clip_kind = "rectangle"
+        self._clip_shape: ClipShape | None = None
         self._clip_gesture: str | None = None
         self._clip_anchor_mm: tuple[float, float] | None = None
-        self._clip_press_rect: ClipRectangle | None = None
+        self._clip_handle: str | None = None
+        self._clip_press_shape: ClipShape | None = None
         self._clip_move_origin_mm: tuple[float, float] | None = None
-        self._clip_move_origin_rect: ClipRectangle | None = None
+        self._clip_move_origin_shape: ClipShape | None = None
         self._clip_pointer_px: QPointF | None = None
         self._view_zoom = 1.0
         self._view_pan_px = QPointF(0.0, 0.0)
@@ -542,19 +554,38 @@ class LayerPreviewWidget(QWidget):
         self.clip_tool_changed.emit(active)
 
     @property
-    def clip_rectangle(self) -> ClipRectangle | None:
-        return self._clip_rectangle
+    def clip_kind(self) -> str:
+        """``rectangle`` or ``ellipse``. Shift on an ellipse draws a circle."""
+        return self._clip_kind
 
-    def set_clip_rectangle(self, rectangle: ClipRectangle | None, *, notify: bool = True) -> None:
-        """Store the keep-inside rectangle. ``notify`` is false while loading a project."""
-        if rectangle is not None:
-            rectangle.validate()
-        if rectangle == self._clip_rectangle:
+    def set_clip_kind(self, kind: str) -> None:
+        if kind not in ("rectangle", "ellipse") or kind == self._clip_kind:
             return
-        self._clip_rectangle = rectangle
+        self._clip_kind = kind
+        self.clip_kind_changed.emit(kind)
+
+    @property
+    def clip_shape(self) -> ClipShape | None:
+        return self._clip_shape
+
+    @property
+    def clip_rectangle(self) -> ClipRectangle | None:
+        return self._clip_shape if isinstance(self._clip_shape, ClipRectangle) else None
+
+    def set_clip_shape(self, shape: ClipShape | None, *, notify: bool = True) -> None:
+        """Store the keep-inside shape. ``notify`` is false while loading a project."""
+        if shape is not None:
+            shape.validate()
+        if shape == self._clip_shape:
+            return
+        self._clip_shape = shape
         self.update()
         if notify:
-            self.clip_rectangle_changed.emit(rectangle)
+            self.clip_rectangle_changed.emit(shape)
+
+    def set_clip_rectangle(self, rectangle: ClipRectangle | None, *, notify: bool = True) -> None:
+        """Store a keep-inside rectangle. ``None`` clears any shape."""
+        self.set_clip_shape(rectangle, notify=notify)
 
     # ---------------------------------------------------------------- view API
     @property
@@ -994,8 +1025,8 @@ class LayerPreviewWidget(QWidget):
             and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
             and not event.isAutoRepeat()
         ):
-            if self._clip_rectangle is not None:
-                self.set_clip_rectangle(None)
+            if self._clip_shape is not None:
+                self.set_clip_shape(None)
             event.accept()
             return
         if (
@@ -1059,7 +1090,7 @@ class LayerPreviewWidget(QWidget):
         elif self._clip_gesture == "resize":
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._clip_gesture == "move" or (
-            self._can_edit_clip() and self._clip_rectangle is not None
+            self._can_edit_clip() and self._clip_shape is not None
         ):
             self.setCursor(Qt.CursorShape.SizeAllCursor)
         elif self._can_edit_clip():
@@ -1104,13 +1135,22 @@ class LayerPreviewWidget(QWidget):
             "se": (rectangle.x_max_mm, rectangle.y_max_mm),
         }
 
-    def _hit_clip_corner(self, point_px: QPointF) -> str | None:
-        rectangle = self._clip_rectangle
-        if rectangle is None:
-            return None
+    def _ellipse_handles_mm(self, ellipse: ClipEllipse) -> dict[str, tuple[float, float]]:
+        return {
+            "e": (ellipse.cx_mm + ellipse.rx_mm, ellipse.cy_mm),
+            "w": (ellipse.cx_mm - ellipse.rx_mm, ellipse.cy_mm),
+            "n": (ellipse.cx_mm, ellipse.cy_mm - ellipse.ry_mm),
+            "s": (ellipse.cx_mm, ellipse.cy_mm + ellipse.ry_mm),
+        }
+
+    def _hit_handles(
+        self,
+        point_px: QPointF,
+        handles: dict[str, tuple[float, float]],
+    ) -> str | None:
         best: str | None = None
         best_distance = self._CLIP_HANDLE_PX
-        for name, (x_mm, y_mm) in self._clip_corners_mm(rectangle).items():
+        for name, (x_mm, y_mm) in handles.items():
             corner = self._mm_to_widget(x_mm, y_mm)
             if corner is None:
                 return None
@@ -1121,14 +1161,18 @@ class LayerPreviewWidget(QWidget):
         return best
 
     def _point_in_clip(self, point_px: QPointF) -> bool:
-        rectangle = self._clip_rectangle
+        shape = self._clip_shape
         mm = self.widget_to_mm(point_px)
-        if rectangle is None or mm is None:
+        if shape is None or mm is None:
             return False
         x, y = mm
-        inside_x = rectangle.x_mm <= x <= rectangle.x_max_mm
-        inside_y = rectangle.y_mm <= y <= rectangle.y_max_mm
-        return inside_x and inside_y
+        if isinstance(shape, ClipRectangle):
+            inside_x = shape.x_mm <= x <= shape.x_max_mm
+            inside_y = shape.y_mm <= y <= shape.y_max_mm
+            return inside_x and inside_y
+        nx = (x - shape.cx_mm) / shape.rx_mm
+        ny = (y - shape.cy_mm) / shape.ry_mm
+        return nx * nx + ny * ny <= 1.0
 
     def _opposite_corner(self, rectangle: ClipRectangle, corner: str) -> tuple[float, float]:
         corners = self._clip_corners_mm(rectangle)
@@ -1147,16 +1191,25 @@ class LayerPreviewWidget(QWidget):
         if not (x_min <= x <= x_max and y_min <= y <= y_max):
             return False
         self._clip_pointer_px = QPointF(point_px)
-        self._clip_press_rect = self._clip_rectangle
-        corner = self._hit_clip_corner(point_px)
-        if corner is not None and self._clip_rectangle is not None:
-            self._clip_gesture = "resize"
-            self._clip_anchor_mm = self._opposite_corner(self._clip_rectangle, corner)
-            return True
-        if self._clip_rectangle is not None and self._point_in_clip(point_px):
+        self._clip_press_shape = self._clip_shape
+        shape = self._clip_shape
+        if isinstance(shape, ClipRectangle):
+            corner = self._hit_handles(point_px, self._clip_corners_mm(shape))
+            if corner is not None:
+                self._clip_gesture = "resize"
+                self._clip_anchor_mm = self._opposite_corner(shape, corner)
+                return True
+        elif isinstance(shape, ClipEllipse):
+            handle = self._hit_handles(point_px, self._ellipse_handles_mm(shape))
+            if handle is not None:
+                self._clip_gesture = "resize"
+                self._clip_handle = handle
+                self._clip_move_origin_shape = shape
+                return True
+        if shape is not None and self._point_in_clip(point_px):
             self._clip_gesture = "move"
             self._clip_move_origin_mm = (x, y)
-            self._clip_move_origin_rect = self._clip_rectangle
+            self._clip_move_origin_shape = shape
             return True
         self._clip_gesture = "draw"
         self._clip_anchor_mm = (x, y)
@@ -1169,17 +1222,36 @@ class LayerPreviewWidget(QWidget):
         if bounds is None or mm is None or self._clip_gesture is None:
             return
         x_min, y_min, x_max, y_max = bounds
-        square = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        constrain = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        result: ClipShape | None
         if (
             self._clip_gesture == "move"
             and self._clip_move_origin_mm is not None
-            and self._clip_move_origin_rect is not None
+            and self._clip_move_origin_shape is not None
         ):
             origin_x, origin_y = self._clip_move_origin_mm
-            result = translate_rectangle(
-                self._clip_move_origin_rect,
-                mm[0] - origin_x,
-                mm[1] - origin_y,
+            dx = mm[0] - origin_x
+            dy = mm[1] - origin_y
+            origin = self._clip_move_origin_shape
+            if isinstance(origin, ClipEllipse):
+                result = translate_ellipse(
+                    origin, dx, dy, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max
+                )
+            else:
+                result = translate_rectangle(
+                    origin, dx, dy, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max
+                )
+        elif (
+            self._clip_gesture == "resize"
+            and isinstance(self._clip_move_origin_shape, ClipEllipse)
+            and self._clip_handle is not None
+        ):
+            result = resize_ellipse(
+                self._clip_move_origin_shape,
+                self._clip_handle,
+                mm[0],
+                mm[1],
+                circle=constrain,
                 x_min=x_min,
                 y_min=y_min,
                 x_max=x_max,
@@ -1187,31 +1259,38 @@ class LayerPreviewWidget(QWidget):
             )
         elif self._clip_anchor_mm is not None:
             anchor_x, anchor_y = self._clip_anchor_mm
-            result = drag_rectangle(
+            rectangle = drag_rectangle(
                 anchor_x,
                 anchor_y,
                 mm[0],
                 mm[1],
-                square=square,
+                square=constrain,
                 x_min=x_min,
                 y_min=y_min,
                 x_max=x_max,
                 y_max=y_max,
             )
+            if rectangle is None:
+                result = None
+            elif self._clip_gesture == "draw" and self._clip_kind == "ellipse":
+                result = ellipse_from_rectangle(rectangle)
+            else:
+                result = rectangle
         else:
             return
         if result is None:
             if self._clip_gesture == "draw":
-                self.set_clip_rectangle(self._clip_press_rect)
+                self.set_clip_shape(self._clip_press_shape)
             return
-        self.set_clip_rectangle(result)
+        self.set_clip_shape(result)
 
     def _end_clip_gesture(self) -> None:
         self._clip_gesture = None
         self._clip_anchor_mm = None
-        self._clip_press_rect = None
+        self._clip_handle = None
+        self._clip_press_shape = None
         self._clip_move_origin_mm = None
-        self._clip_move_origin_rect = None
+        self._clip_move_origin_shape = None
         self._clip_pointer_px = None
 
     # ------------------------------------------------------------ physical
@@ -1340,34 +1419,52 @@ class LayerPreviewWidget(QWidget):
         self._painted_printable_boundary = True
 
     def _paint_clip_overlay(self, painter: QPainter, scale_px: float) -> None:
-        """Amber keep-inside rectangle. Handles appear only while the clip tool is on."""
-        rectangle = self._clip_rectangle
-        if rectangle is None or scale_px <= 0:
+        """Amber keep-inside shape. Handles appear only while the clip tool is on."""
+        shape = self._clip_shape
+        if shape is None or scale_px <= 0:
             return
-        rect = QRectF(
-            rectangle.x_mm * scale_px,
-            rectangle.y_mm * scale_px,
-            rectangle.width_mm * scale_px,
-            rectangle.height_mm * scale_px,
-        )
+        if isinstance(shape, ClipEllipse):
+            rect = QRectF(
+                (shape.cx_mm - shape.rx_mm) * scale_px,
+                (shape.cy_mm - shape.ry_mm) * scale_px,
+                shape.rx_mm * 2.0 * scale_px,
+                shape.ry_mm * 2.0 * scale_px,
+            )
+            handles = self._ellipse_handles_mm(shape)
+            draw_ellipse = True
+        else:
+            rect = QRectF(
+                shape.x_mm * scale_px,
+                shape.y_mm * scale_px,
+                shape.width_mm * scale_px,
+                shape.height_mm * scale_px,
+            )
+            handles = self._clip_corners_mm(shape)
+            draw_ellipse = False
         fill = QColor(COLORS.clip_outline)
         fill.setAlpha(36)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fill)
-        painter.drawRect(rect)
+        if draw_ellipse:
+            painter.drawEllipse(rect)
+        else:
+            painter.drawRect(rect)
         pen = QPen(QColor(COLORS.clip_outline))
         pen.setStyle(Qt.PenStyle.DashLine)
         pen.setWidthF(1.6)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(rect)
+        if draw_ellipse:
+            painter.drawEllipse(rect)
+        else:
+            painter.drawRect(rect)
         if not self._clip_tool:
             return
         handle = 7.0
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(COLORS.clip_outline))
-        for x_mm, y_mm in self._clip_corners_mm(rectangle).values():
+        for x_mm, y_mm in handles.values():
             center = QPointF(x_mm * scale_px, y_mm * scale_px)
             painter.drawRect(
                 QRectF(center.x() - handle / 2, center.y() - handle / 2, handle, handle)

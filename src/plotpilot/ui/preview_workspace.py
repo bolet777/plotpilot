@@ -122,9 +122,9 @@ class PreviewWorkspace(QWidget):
         self.tools.body.addWidget(self.move_button)
         self.clip_button = make_tool_button(
             "▭",
-            "Clip tool: drag a rectangle to keep strokes inside it.\n"
-            "Shift constrains a square. Drag inside to move, corners to resize.\n"
-            "Delete removes it. The rectangle is not plotted.",
+            "Clip tool: drag a shape to keep strokes inside it.\n"
+            "Shift constrains a square or a circle. Drag inside to move, handles to resize.\n"
+            "Delete removes it. The shape is not plotted.",
             self.tools,
         )
         self.clip_button.setCheckable(True)
@@ -134,6 +134,28 @@ class PreviewWorkspace(QWidget):
         self.preview.transform_controls_enabled_changed.connect(self.clip_button.setEnabled)
         self.preview.clip_tool_changed.connect(self._sync_clip_button)
         self.tools.body.addWidget(self.clip_button)
+        self.rectangle_shape_button = make_tool_button(
+            "▭",
+            "Rectangle clip. Shift constrains a square.",
+            self.tools,
+        )
+        self.ellipse_shape_button = make_tool_button(
+            "◯",
+            "Ellipse clip. Shift constrains a circle.",
+            self.tools,
+        )
+        for button in (self.rectangle_shape_button, self.ellipse_shape_button):
+            button.setCheckable(True)
+            button.setVisible(False)
+            self.tools.body.addWidget(button)
+        self.rectangle_shape_button.toggled.connect(
+            lambda checked: self._on_shape_toggled("rectangle", checked)
+        )
+        self.ellipse_shape_button.toggled.connect(
+            lambda checked: self._on_shape_toggled("ellipse", checked)
+        )
+        self.preview.clip_kind_changed.connect(lambda _kind: self._sync_shape_buttons())
+        self.preview.clip_tool_changed.connect(lambda _active: self._sync_shape_buttons())
         self.zoom_in_button = make_tool_button("＋", "Zoom in (⌘+)", self.tools)
         self.zoom_in_button.clicked.connect(self.preview.zoom_in)
         self.tools.body.addWidget(self.zoom_in_button)
@@ -200,6 +222,29 @@ class PreviewWorkspace(QWidget):
         self.clip_button.blockSignals(True)
         self.clip_button.setChecked(active)
         self.clip_button.blockSignals(False)
+
+    def _on_shape_toggled(self, kind: str, checked: bool) -> None:
+        if not self.preview.clip_tool_active:
+            self._sync_shape_buttons()
+            return
+        if checked:
+            self.preview.set_clip_kind(kind)
+            return
+        if self.preview.clip_kind == kind:
+            self._sync_shape_buttons()
+
+    def _sync_shape_buttons(self) -> None:
+        active = self.preview.clip_tool_active
+        kind = self.preview.clip_kind
+        for button, button_kind in (
+            (self.rectangle_shape_button, "rectangle"),
+            (self.ellipse_shape_button, "ellipse"),
+        ):
+            button.setVisible(active)
+            button.blockSignals(True)
+            button.setChecked(active and kind == button_kind)
+            button.blockSignals(False)
+        self._place_overlays()
 
     def _sync_zoom_label(self) -> None:
         self.zoom_label.setText(f"{int(round(self.preview.view_zoom * 100))}%")

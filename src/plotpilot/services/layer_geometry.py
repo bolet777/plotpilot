@@ -11,7 +11,7 @@ from plotpilot.geometry.plot_viewport import (
 )
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipShape
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
@@ -88,12 +88,12 @@ def position_and_clip_geometry(
     viewport_width_mm: float,
     viewport_height_mm: float,
     print_margins: PrintMargins | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> ClippedLayerGeometry:
     """Place cached document polylines and clip them to the printable area.
 
-    ``keep_inside`` further limits the clip to that rectangle's overlap with
-    the printable area. ``None`` keeps today's margin clip.
+    ``keep_inside`` further limits the clip to a rectangle overlap or an ellipse.
+    ``None`` keeps today's margin clip.
     """
     if geometry.preparation_error is not None:
         return ClippedLayerGeometry(
@@ -173,7 +173,7 @@ class LayerGeometryCache:
         viewport_width_mm: float,
         viewport_height_mm: float,
         print_margins: PrintMargins | None = None,
-        keep_inside: ClipRectangle | None = None,
+        keep_inside: ClipShape | None = None,
     ) -> ClippedLayerGeometry:
         """Prepare on cache miss, then clip. For tests and synchronous callers."""
         geometry = self.lookup(id(document), layer.layer_id)

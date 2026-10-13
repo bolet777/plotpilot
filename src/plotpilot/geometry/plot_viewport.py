@@ -10,13 +10,14 @@ from xml.etree import ElementTree as ET
 
 from svgelements import SVG, Arc, Close, Group, Line, Move, Shape
 
+from plotpilot.geometry.ellipse_clip import clip_segment_to_ellipse, ellipse_overlaps_rect
 from plotpilot.geometry.liang_barsky import ClipRect, clip_segment
 from plotpilot.models.artwork_transform import (
     ArtworkTransform,
     orient_point,
     resolve_rotation_degrees,
 )
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipEllipse, ClipRectangle, ClipShape
 from plotpilot.svg.page_geometry import SvgPageGeometry, parse_page_geometry
 from plotpilot.svg.plot_dimensions import PlotDimensionError
 
@@ -80,7 +81,7 @@ def clip_document_polylines(
     clip_y_max_mm: float | None = None,
     page_width_mm: float | None = None,
     page_height_mm: float | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Place document polylines and clip them to an arbitrary machine rectangle.
 
@@ -88,9 +89,10 @@ def clip_document_polylines(
     pass the printable-area edges so margins do not shift machine coordinates.
     ``page_width_mm`` / ``page_height_mm`` are required when the transform
     orientation is not ``PRESERVED`` (the page is rotated about its own size).
-    ``keep_inside`` further limits that window to the overlap with an
-    axis-aligned rectangle. ``None`` leaves the printable window unchanged.
-    A rectangle that does not overlap the window yields no polylines.
+    A keep-inside rectangle further limits that window to the overlap, in one
+    Liang–Barsky pass. An ellipse is applied after the printable clip. ``None``
+    leaves the printable window unchanged. A shape that misses the window
+    yields no polylines.
     """
     transform.validate()
     clip = _resolve_clip_rect(
@@ -101,8 +103,9 @@ def clip_document_polylines(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
-    overlap = overlap_clip_rect(clip, keep_inside)
-    if overlap is None:
+    rectangle, ellipse = _split_keep_inside(keep_inside)
+    overlap = overlap_clip_rect(clip, rectangle)
+    if overlap is None or not _ellipse_hits(ellipse, overlap):
         return []
     return _clip_document_subpaths(
         polylines,
@@ -110,6 +113,7 @@ def clip_document_polylines(
         overlap,
         page_width_mm=page_width_mm,
         page_height_mm=page_height_mm,
+        ellipse=ellipse,
     )
 
 
@@ -123,7 +127,7 @@ def prepare_positioned_plot_svg(
     clip_y_min_mm: float = 0.0,
     clip_x_max_mm: float | None = None,
     clip_y_max_mm: float | None = None,
-    keep_inside: ClipRectangle | None = None,
+    keep_inside: ClipShape | None = None,
 ) -> PreparedPlotSvg:
     """Return clipped plot SVG in machine coordinates (1 unit = 1 mm)."""
     transform.validate()
@@ -135,9 +139,10 @@ def prepare_positioned_plot_svg(
         clip_x_max_mm=clip_x_max_mm,
         clip_y_max_mm=clip_y_max_mm,
     )
-    overlap = overlap_clip_rect(clip, keep_inside)
+    rectangle, ellipse = _split_keep_inside(keep_inside)
+    overlap = overlap_clip_rect(clip, rectangle)
     flattened = flatten_document_geometry(svg_text)
-    if overlap is None:
+    if overlap is None or not _ellipse_hits(ellipse, overlap):
         clipped_paths: list[tuple[tuple[float, float], ...]] = []
         active = clip
     else:
@@ -147,6 +152,7 @@ def prepare_positioned_plot_svg(
             overlap,
             page_width_mm=flattened.page_width_mm,
             page_height_mm=flattened.page_height_mm,
+            ellipse=ellipse,
         )
         active = overlap
 
@@ -233,6 +239,24 @@ def overlap_clip_rect(printable: ClipRect, keep_inside: ClipRectangle | None) ->
     if x_max <= x_min or y_max <= y_min:
         return None
     return ClipRect(x_min, y_min, x_max, y_max)
+
+
+def _split_keep_inside(
+    keep_inside: ClipShape | None,
+) -> tuple[ClipRectangle | None, ClipEllipse | None]:
+    """Rectangle stays on the Liang–Barsky fast path. An ellipse is a second cut."""
+    if keep_inside is None:
+        return None, None
+    keep_inside.validate()
+    if isinstance(keep_inside, ClipEllipse):
+        return None, keep_inside
+    return keep_inside, None
+
+
+def _ellipse_hits(ellipse: ClipEllipse | None, clip: ClipRect) -> bool:
+    if ellipse is None:
+        return True
+    return ellipse_overlaps_rect(ellipse, clip.x_min, clip.y_min, clip.x_max, clip.y_max)
 
 
 def _validate_emitted_svg(
@@ -384,6 +408,7 @@ def _clip_document_subpaths(
     *,
     page_width_mm: float | None = None,
     page_height_mm: float | None = None,
+    ellipse: ClipEllipse | None = None,
 ) -> list[tuple[tuple[float, float], ...]]:
     """Orient, place, and Liang–Barsky clip pre-flattened document polylines."""
     transform.validate()
@@ -427,6 +452,12 @@ def _clip_document_subpaths(
         if not accept:
             flush()
             return
+        if ellipse is not None:
+            kept = clip_segment_to_ellipse(nx0, ny0, nx1, ny1, ellipse)
+            if kept is None:
+                flush()
+                return
+            nx0, ny0, nx1, ny1 = kept
         if _points_near((nx0, ny0), (nx1, ny1)):
             return
         if not current:

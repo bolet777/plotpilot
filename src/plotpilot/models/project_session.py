@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle
+from plotpilot.models.clip_shape import ClipEllipse, ClipRectangle
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import PrintMargins
 from plotpilot.services.preview_work_area import FallbackWorkArea, WorkAreaOrientation
@@ -24,3 +24,4 @@ class ProjectSession:
     fallback_work_area_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT
     print_margins: PrintMargins = field(default_factory=PrintMargins)
     clip_rectangle: ClipRectangle | None = None
+    clip_ellipse: ClipEllipse | None = None
