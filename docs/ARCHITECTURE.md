@@ -142,7 +142,7 @@ ActionBar                    status strip · progress · pen-change banner · bu
 | 028 | Editable print margins and a shared printable rectangle |
 | 029 | Optional keep-inside rectangle on the printable area (geometry) |
 | 030 | Interactive clip rectangle (frozen): preview tool, plot, estimate, project file |
-| 031 | Ellipse and circle keep-inside on the clip tool |
+| 031 | Ellipse and circle keep-inside (frozen): clip tool, plot, estimate, project file |
 
 ## Platform notes
 

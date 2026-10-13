@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-13
 
-**Status**: Implemented on `031-ellipse-keep-inside`. Not merged.
+**Status**: Frozen. Pytest, ruff, and a driven main-window pass were run before the merge. Not a user sign-off.
 
 **Input**: Slice 3 of shape clipping: circle and ellipse keep-inside on the existing clip tool. Rectangle clipping stays. No remove-inside. No new panel.
 
