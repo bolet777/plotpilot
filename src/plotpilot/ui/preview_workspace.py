@@ -122,7 +122,7 @@ class PreviewWorkspace(QWidget):
         self.tools.body.addWidget(self.move_button)
         self.clip_button = make_tool_button(
             "▭",
-            "Clip tool: drag a shape to keep strokes inside it.\n"
+            "Clip tool: drag a shape, then keep strokes inside it or cut them out.\n"
             "Shift constrains a square or a circle. Drag inside to move, handles to resize.\n"
             "Delete removes it. The shape is not plotted.",
             self.tools,
@@ -156,6 +156,29 @@ class PreviewWorkspace(QWidget):
         )
         self.preview.clip_kind_changed.connect(lambda _kind: self._sync_shape_buttons())
         self.preview.clip_tool_changed.connect(lambda _active: self._sync_shape_buttons())
+        self.keep_mode_button = make_tool_button(
+            "In",
+            "Keep inside: plot the strokes inside the shape.",
+            self.tools,
+        )
+        self.remove_mode_button = make_tool_button(
+            "Out",
+            "Remove inside: cut a hole and plot the strokes outside the shape.",
+            self.tools,
+        )
+        for button in (self.keep_mode_button, self.remove_mode_button):
+            button.setCheckable(True)
+            button.setVisible(False)
+            self.tools.body.addWidget(button)
+        self.keep_mode_button.toggled.connect(
+            lambda checked: self._on_mode_toggled("keep_inside", checked)
+        )
+        self.remove_mode_button.toggled.connect(
+            lambda checked: self._on_mode_toggled("remove_inside", checked)
+        )
+        self.preview.clip_mode_changed.connect(lambda _mode: self._sync_mode_buttons())
+        self.preview.clip_rectangle_changed.connect(lambda _shape: self._sync_mode_buttons())
+        self.preview.clip_tool_changed.connect(lambda _active: self._sync_mode_buttons())
         self.zoom_in_button = make_tool_button("＋", "Zoom in (⌘+)", self.tools)
         self.zoom_in_button.clicked.connect(self.preview.zoom_in)
         self.tools.body.addWidget(self.zoom_in_button)
@@ -243,6 +266,29 @@ class PreviewWorkspace(QWidget):
             button.setVisible(active)
             button.blockSignals(True)
             button.setChecked(active and kind == button_kind)
+            button.blockSignals(False)
+        self._place_overlays()
+
+    def _on_mode_toggled(self, mode: str, checked: bool) -> None:
+        if self.preview.clip_shape is None or not self.preview.clip_tool_active:
+            self._sync_mode_buttons()
+            return
+        if checked:
+            self.preview.set_clip_mode(mode)
+            return
+        if self.preview.clip_mode.value == mode:
+            self._sync_mode_buttons()
+
+    def _sync_mode_buttons(self) -> None:
+        visible = self.preview.clip_tool_active and self.preview.clip_shape is not None
+        mode = self.preview.clip_mode.value
+        for button, button_mode in (
+            (self.keep_mode_button, "keep_inside"),
+            (self.remove_mode_button, "remove_inside"),
+        ):
+            button.setVisible(visible)
+            button.blockSignals(True)
+            button.setChecked(visible and mode == button_mode)
             button.blockSignals(False)
         self._place_overlays()
 

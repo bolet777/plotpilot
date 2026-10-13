@@ -11,7 +11,7 @@ from plotpilot.geometry.plot_viewport import (
 )
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipShape
+from plotpilot.models.clip_shape import ClipMode, ClipShape
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
@@ -89,11 +89,12 @@ def position_and_clip_geometry(
     viewport_height_mm: float,
     print_margins: PrintMargins | None = None,
     keep_inside: ClipShape | None = None,
+    clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
 ) -> ClippedLayerGeometry:
     """Place cached document polylines and clip them to the printable area.
 
-    ``keep_inside`` further limits the clip to a rectangle overlap or an ellipse.
-    ``None`` keeps today's margin clip.
+    ``keep_inside`` further limits the clip to a rectangle overlap or an ellipse,
+    or removes the inside of that shape. ``None`` keeps today's margin clip.
     """
     if geometry.preparation_error is not None:
         return ClippedLayerGeometry(
@@ -116,6 +117,7 @@ def position_and_clip_geometry(
             page_width_mm=geometry.page_width_mm,
             page_height_mm=geometry.page_height_mm,
             keep_inside=keep_inside,
+            clip_mode=clip_mode,
         )
     except PrintMarginsError as exc:
         return ClippedLayerGeometry(polylines=(), path_count=0, error_message=exc.user_message)
@@ -174,6 +176,7 @@ class LayerGeometryCache:
         viewport_height_mm: float,
         print_margins: PrintMargins | None = None,
         keep_inside: ClipShape | None = None,
+        clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
     ) -> ClippedLayerGeometry:
         """Prepare on cache miss, then clip. For tests and synchronous callers."""
         geometry = self.lookup(id(document), layer.layer_id)
@@ -189,6 +192,7 @@ class LayerGeometryCache:
             viewport_height_mm=viewport_height_mm,
             print_margins=print_margins,
             keep_inside=keep_inside,
+            clip_mode=clip_mode,
         )
 
 

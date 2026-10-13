@@ -51,6 +51,7 @@ from plotpilot.models.artwork_transform import (
 )
 from plotpilot.models.clip_shape import (
     ClipEllipse,
+    ClipMode,
     ClipRectangle,
     ClipShape,
     drag_rectangle,
@@ -200,6 +201,7 @@ class LayerPreviewWidget(QWidget):
     artwork_transform_changed = Signal(object)
     clip_rectangle_changed = Signal(object)
     clip_kind_changed = Signal(str)
+    clip_mode_changed = Signal(str)
     clip_tool_changed = Signal(bool)
     move_tool_changed = Signal(bool)
     view_changed = Signal()
@@ -230,6 +232,7 @@ class LayerPreviewWidget(QWidget):
         self._move_tool = True
         self._clip_tool = False
         self._clip_kind = "rectangle"
+        self._clip_mode = ClipMode.KEEP_INSIDE
         self._clip_shape: ClipShape | None = None
         self._clip_gesture: str | None = None
         self._clip_anchor_mm: tuple[float, float] | None = None
@@ -563,6 +566,24 @@ class LayerPreviewWidget(QWidget):
             return
         self._clip_kind = kind
         self.clip_kind_changed.emit(kind)
+
+    @property
+    def clip_mode(self) -> ClipMode:
+        return self._clip_mode
+
+    def set_clip_mode(self, mode: ClipMode | str, *, notify: bool = True) -> None:
+        """Switch keep/remove without moving the shape, the view, or the SVG."""
+        try:
+            parsed = mode if isinstance(mode, ClipMode) else ClipMode(mode)
+        except ValueError:
+            return
+        if parsed is self._clip_mode:
+            return
+        self._clip_mode = parsed
+        self.clip_mode_changed.emit(parsed.value)
+        self.update()
+        if notify:
+            self.clip_rectangle_changed.emit(self._clip_shape)
 
     @property
     def clip_shape(self) -> ClipShape | None:
@@ -1419,7 +1440,7 @@ class LayerPreviewWidget(QWidget):
         self._painted_printable_boundary = True
 
     def _paint_clip_overlay(self, painter: QPainter, scale_px: float) -> None:
-        """Amber keep-inside shape. Handles appear only while the clip tool is on."""
+        """Amber clip shape. Handles appear only while the clip tool is on."""
         shape = self._clip_shape
         if shape is None or scale_px <= 0:
             return

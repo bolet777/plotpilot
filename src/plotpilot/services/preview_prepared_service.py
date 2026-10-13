@@ -16,7 +16,7 @@ from plotpilot.geometry.plot_viewport import (
 )
 from plotpilot.models import print_margins as print_margin_model
 from plotpilot.models.artwork_transform import ArtworkTransform
-from plotpilot.models.clip_shape import ClipRectangle, ClipShape
+from plotpilot.models.clip_shape import ClipMode, ClipRectangle, ClipShape
 from plotpilot.models.plot_settings import PlotSettings
 from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, printable_area_for
 from plotpilot.models.svg_document import SvgDocument
@@ -95,6 +95,7 @@ def build_prepared_layer_preview(
     fallback_orientation: WorkAreaOrientation = WorkAreaOrientation.PORTRAIT,
     print_margins: PrintMargins | None = None,
     keep_inside: ClipShape | None = None,
+    clip_mode: ClipMode = ClipMode.KEEP_INSIDE,
 ) -> PreparedLayerPreview:
     """Prepare layer geometry for preview using the plot pipeline."""
     from plotpilot.services.layer_geometry import position_and_clip_geometry, prepare_layer_geometry
@@ -125,13 +126,16 @@ def build_prepared_layer_preview(
         viewport_height_mm=viewport.height_mm,
         print_margins=margins,
         keep_inside=keep_inside,
+        clip_mode=clip_mode,
     )
     prepared: PreparedPlotSvg | None = None
     error_message = clipped.error_message
     if error_message is None:
         try:
             area = printable_area_for(viewport.width_mm, viewport.height_mm, margins)
-            rectangle = keep_inside if isinstance(keep_inside, ClipRectangle) else None
+            rectangle = None
+            if clip_mode is not ClipMode.REMOVE_INSIDE and isinstance(keep_inside, ClipRectangle):
+                rectangle = keep_inside
             window = overlap_clip_rect(
                 ClipRect(area.x_mm, area.y_mm, area.x_max_mm, area.y_max_mm),
                 rectangle,
