@@ -4,9 +4,9 @@ Investigation only. Conclusions below are from the repository as inspected for
 this study. Items marked **Assumption** were not executed or measured in this
 pass.
 
-**Follow-up status:** Slice 1 (axis-aligned keep-inside rectangle) is frozen in
-`specs/029-rectangle-keep-inside/`. It has not been user-tested. The app has no
-control for it yet, so a normal plot still uses only the printable area.
+**Follow-up status:** Slice 1 (geometry) is frozen in
+`specs/029-rectangle-keep-inside/`. Slice 2 (the clip tool) is frozen in
+`specs/030-clip-rectangle-tool/`. A plot uses the rectangle when one is drawn.
 
 ## 1. Executive summary
 

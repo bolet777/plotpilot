@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-13
 
-**Status**: Implemented on `030-clip-rectangle-tool`. Not merged.
+**Status**: Frozen. Pytest, ruff, and a driven main-window pass were run before the merge. Not a user sign-off.
 
 **Input**: User description: "Slice 2: draw, move, resize, and delete one keep-inside rectangle on the preview. Machine millimetres. Optional project field on the existing file version. Preview, plot, estimate, and multi-layer use the Slice 1 cut. No extra panel and no Apply button."
 

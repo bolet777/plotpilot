@@ -1,6 +1,8 @@
 # Implementation notes: Interactive clip rectangle
 
-Slice 2. The rectangle is the Slice 1 `ClipRectangle`. The preview edits it. The existing worker still cuts the strokes.
+**Status: frozen.** Slice 2 is merged. Pytest and ruff passed, and the main window was driven through draw, move, resize, zoom, and delete. That is not a user sign-off.
+
+The rectangle is the Slice 1 `ClipRectangle`. The preview edits it. The existing worker still cuts the strokes.
 
 ## Decisions
 
