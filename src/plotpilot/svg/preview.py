@@ -1,8 +1,9 @@
-"""Build isolated SVG previews for a single layer (stdlib only)."""
+"""Build isolated SVG previews for one layer or a checked set (stdlib only)."""
 
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from xml.etree import ElementTree as ET
 from xml.etree.ElementTree import Element
 
@@ -92,6 +93,30 @@ def _append_isolated_layer(
     current.append(copy.deepcopy(chain[-1]))
 
 
+def composite_preview_layers(
+    document: SvgDocument,
+    layers: Sequence[SvgLayer],
+) -> tuple[SvgLayer, ...]:
+    """Drop a checked layer when a checked ancestor already contains it.
+
+    Root-level siblings stay. Order follows *layers* (the layer list order).
+    """
+    if not layers:
+        return ()
+    parent_map = _build_parent_map(document.root)
+    checked_elements = {layer.element for layer in layers}
+
+    def covered_by_checked_ancestor(layer: SvgLayer) -> bool:
+        node = parent_map.get(layer.element)
+        while node is not None:
+            if node in checked_elements:
+                return True
+            node = parent_map.get(node)
+        return False
+
+    return tuple(layer for layer in layers if not covered_by_checked_ancestor(layer))
+
+
 def build_layer_preview_svg(document: SvgDocument, layer: SvgLayer) -> str:
     """Return UTF-8 SVG text for *layer* without modifying *document*."""
     if _is_document_layer(document, layer):
@@ -102,5 +127,26 @@ def build_layer_preview_svg(document: SvgDocument, layer: SvgLayer) -> str:
     preview_root = _copy_root_shell(source_root)
     _append_root_resources(source_root, preview_root)
     _append_isolated_layer(preview_root, source_root, layer.element, parent_map)
+
+    return ET.tostring(preview_root, encoding="unicode", xml_declaration=True)
+
+
+def build_layers_preview_svg(document: SvgDocument, layers: Sequence[SvgLayer]) -> str:
+    """Return one SVG containing each layer in *layers*, sharing root defs once.
+
+    Callers pass the already-normalized checked set. A single layer matches
+    :func:`build_layer_preview_svg`.
+    """
+    if len(layers) == 1:
+        return build_layer_preview_svg(document, layers[0])
+    if any(_is_document_layer(document, layer) for layer in layers):
+        return document.raw_text
+
+    source_root = document.root
+    parent_map = _build_parent_map(source_root)
+    preview_root = _copy_root_shell(source_root)
+    _append_root_resources(source_root, preview_root)
+    for layer in layers:
+        _append_isolated_layer(preview_root, source_root, layer.element, parent_map)
 
     return ET.tostring(preview_root, encoding="unicode", xml_declaration=True)

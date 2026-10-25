@@ -91,7 +91,7 @@ class LayerItemDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(COLORS.raised))
             painter.drawRoundedRect(row_rect, 6, 6)
 
-        # Checkbox (plot this layer in multi-layer jobs)
+        # Checkbox: include this layer in the preview and in multi-layer plots.
         check = self.check_rect(rect)
         checked = index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
         flags = index.flags()
@@ -245,7 +245,7 @@ class LayersPanel(QWidget):
         root.addWidget(self.list_widget, stretch=1)
 
         self.hint_label = make_wrapping_label(
-            "Check layers to include them in a multi-layer plot.", self, role="muted"
+            "Check layers to preview and plot them together.", self, role="muted"
         )
         root.addWidget(self.hint_label)
 

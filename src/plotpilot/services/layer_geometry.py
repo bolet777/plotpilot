@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from plotpilot.geometry.plot_viewport import (
@@ -16,7 +17,7 @@ from plotpilot.models.print_margins import PrintMargins, PrintMarginsError, prin
 from plotpilot.models.svg_document import SvgDocument
 from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.services.preview_prepared_service import LayerContentCounts, count_layer_content
-from plotpilot.services.preview_service import preview_svg_for_layer
+from plotpilot.services.preview_service import preview_svg_for_layer, preview_svg_for_layers
 from plotpilot.svg.plot_dimensions import PlotDimensionError, parse_physical_size
 
 _NO_INTERSECTION = "No artwork intersects the plot area."
@@ -43,9 +44,8 @@ class ClippedLayerGeometry:
     error_message: str | None
 
 
-def prepare_layer_geometry(document: SvgDocument, layer: SvgLayer) -> PreparedLayerGeometry:
-    """Isolate, parse, diagnose, and flatten one layer. Independent of placement."""
-    context_svg = preview_svg_for_layer(document, layer)
+def _geometry_from_context_svg(context_svg: str) -> PreparedLayerGeometry:
+    """Parse, diagnose, and flatten an already isolated preview SVG."""
     try:
         physical = parse_physical_size(context_svg)
     except PlotDimensionError as exc:
@@ -79,6 +79,22 @@ def prepare_layer_geometry(document: SvgDocument, layer: SvgLayer) -> PreparedLa
         polylines=flattened.polylines,
         preparation_error=None,
     )
+
+
+def prepare_layer_geometry(document: SvgDocument, layer: SvgLayer) -> PreparedLayerGeometry:
+    """Isolate, parse, diagnose, and flatten one layer. Independent of placement."""
+    return _geometry_from_context_svg(preview_svg_for_layer(document, layer))
+
+
+def prepare_composite_geometry(
+    document: SvgDocument,
+    layers: Sequence[SvgLayer],
+) -> PreparedLayerGeometry:
+    """Compose the checked layers, then flatten once. Independent of placement.
+
+    Descendants of a checked ancestor are omitted so nested groups are not drawn twice.
+    """
+    return _geometry_from_context_svg(preview_svg_for_layers(document, layers))
 
 
 def position_and_clip_geometry(
@@ -196,6 +212,52 @@ class LayerGeometryCache:
         )
 
 
+class PreviewCompositeCache:
+    """Flattened geometry for one checked-layer preview set.
+
+    Separate from :class:`LayerGeometryCache`. The highlighted-layer cache stays
+    the single selected layer (slider travel). This slot is keyed by document
+    identity and the ordered tuple of normalized layer ids — the same inputs
+    that invalidate flattened preview geometry. Placement (transform, margins,
+    clip) is applied later and is not part of the key.
+    """
+
+    def __init__(self) -> None:
+        self.prepare_count = 0
+        self.clip_count = 0
+        self._document_id: int | None = None
+        self._layer_ids: tuple[str, ...] | None = None
+        self._geometry: PreparedLayerGeometry | None = None
+
+    def lookup(
+        self,
+        document_id: int,
+        layer_ids: tuple[str, ...],
+    ) -> PreparedLayerGeometry | None:
+        if (
+            self._geometry is not None
+            and self._document_id == document_id
+            and self._layer_ids == layer_ids
+        ):
+            return self._geometry
+        return None
+
+    def store(
+        self,
+        document_id: int,
+        layer_ids: tuple[str, ...],
+        geometry: PreparedLayerGeometry,
+    ) -> None:
+        self._document_id = document_id
+        self._layer_ids = layer_ids
+        self._geometry = geometry
+
+    def invalidate(self) -> None:
+        self._document_id = None
+        self._layer_ids = None
+        self._geometry = None
+
+
 class PreviewResultGate:
     """Generation counter: only the newest request may update the preview."""
 
@@ -219,7 +281,9 @@ __all__ = [
     "ClippedLayerGeometry",
     "LayerGeometryCache",
     "PreparedLayerGeometry",
+    "PreviewCompositeCache",
     "PreviewResultGate",
     "position_and_clip_geometry",
+    "prepare_composite_geometry",
     "prepare_layer_geometry",
 ]

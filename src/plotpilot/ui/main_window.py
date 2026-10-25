@@ -50,16 +50,23 @@ from plotpilot.models.svg_layer import SvgLayer
 from plotpilot.plotter.axidraw import AxiDrawCliBackend
 from plotpilot.plotter.base import PlotterBackend
 from plotpilot.services.bounds_service import check_plot_bounds
-from plotpilot.services.layer_geometry import LayerGeometryCache
+from plotpilot.services.layer_geometry import LayerGeometryCache, PreviewCompositeCache
 from plotpilot.services.layer_service import layers_for_document
 from plotpilot.services.multi_layer_plot_service import MultiLayerPlotService
 from plotpilot.services.plotter_service import PlotterService
 from plotpilot.services.preview_compute_service import (
+    HighlightedLayerGeometry,
     InteractivePreview,
     PreviewComputeService,
+    compute_highlighted_layer_geometry,
+    compute_interactive_composite_preview,
     compute_interactive_preview,
 )
-from plotpilot.services.preview_service import preview_svg_for_layer
+from plotpilot.services.preview_service import (
+    composite_preview_layers,
+    preview_svg_for_layer,
+    preview_svg_for_layers,
+)
 from plotpilot.services.preview_work_area import (
     FallbackWorkArea,
     WorkAreaOrientation,
@@ -245,8 +252,11 @@ class MainWindow(QMainWindow):
         self._multi_layer_service.job_changed.connect(self._apply_multi_layer_job)
         self._multi_layer_service.pen_change_required.connect(self._on_pen_change_required)
         self._geometry_cache = LayerGeometryCache()
+        self._composite_cache = PreviewCompositeCache()
         self._preview_compute = PreviewComputeService(parent=self)
         self._preview_compute.finished.connect(self._on_preview_compute_finished)
+        self._highlighted_compute = PreviewComputeService(parent=self)
+        self._highlighted_compute.finished.connect(self._on_highlighted_geometry_finished)
 
         self._build_ui()
         self._build_menu()
@@ -453,6 +463,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
         self._preview_prep_timer.stop()
         self._preview_compute.shutdown()
+        self._highlighted_compute.shutdown()
         self._plotter_service.shutdown()
         super().closeEvent(event)
 
@@ -1101,6 +1112,7 @@ class MainWindow(QMainWindow):
             else:
                 item.setCheckState(Qt.CheckState.Unchecked)
         self._updating_layers = False
+        self._update_preview_for_current_layer()
         self._update_plot_controls()
 
     def _sync_fallback_combo_from_service(self) -> None:
@@ -1182,6 +1194,12 @@ class MainWindow(QMainWindow):
     def _on_layer_row_changed(self, _row: int) -> None:
         if self._updating_layers:
             return
+        if self._composite_layers():
+            # Checked layers own the ink. Keep the highlighted layer's geometry
+            # for slider travel without replacing that composite preview.
+            self._ensure_highlighted_geometry()
+            self._update_plot_controls()
+            return
         self._update_preview_for_current_layer()
         self._update_plot_controls()
 
@@ -1193,24 +1211,66 @@ class MainWindow(QMainWindow):
         _ = item
         self._mark_project_dirty()
         self._update_plot_controls()
+        self._update_preview_for_current_layer()
+
+    def _composite_layers(self) -> list[SvgLayer]:
+        """Normalized checked layers, or empty when the highlight drives the preview."""
+        document = self._document
+        if document is None:
+            return []
+        checked = self._checked_layers()
+        if not checked:
+            return []
+        return list(composite_preview_layers(document, checked))
 
     # --------------------------------------------------------------- preview
     def _update_preview_for_current_layer(self) -> None:
         if self._document is None or not self._layers:
             self._preview.clear_preview()
+            self._composite_cache.invalidate()
+            return
+
+        composite = self._composite_layers()
+        if composite:
+            # Drop a highlighted-layer job that is still in flight so it cannot
+            # paint over the checked set during the debounce.
+            self._preview_compute.cancel_pending()
+            svg_text = preview_svg_for_layers(self._document, composite)
+            self._preview.set_preview_svg(svg_text)
+            self._preview.clear_clipped_plot()
+            self._schedule_prepared_preview_refresh()
+            self._ensure_highlighted_geometry()
             return
 
         row = self._layers_list.currentRow()
         if row < 0 or row >= len(self._layers):
             self._preview.clear_preview("Select a layer to preview.")
+            self._composite_cache.invalidate()
             return
 
         layer = self._layers[row]
+        self._preview_compute.cancel_pending()
         svg_text = preview_svg_for_layer(self._document, layer)
         self._preview.set_preview_svg(svg_text)
         self._geometry_cache.invalidate()
+        self._composite_cache.invalidate()
         self._preview.clear_clipped_plot()
         self._schedule_prepared_preview_refresh()
+
+    def _ensure_highlighted_geometry(self) -> None:
+        """Keep the single-layer cache equal to the highlighted layer."""
+        document = self._document
+        layer = self._current_layer()
+        if document is None or layer is None:
+            return
+        if self._geometry_cache.lookup(id(document), layer.layer_id) is not None:
+            self._refresh_artwork_transform_panel()
+            return
+
+        def operation() -> HighlightedLayerGeometry:
+            return compute_highlighted_layer_geometry(document, layer)
+
+        self._highlighted_compute.submit(operation)
 
     def _schedule_prepared_preview_refresh(self) -> None:
         if self._document is None or not self._layers:
@@ -1234,11 +1294,40 @@ class MainWindow(QMainWindow):
         if self._document is None or not self._layers:
             return
 
+        document = self._document
+        composite = self._composite_layers()
+        if composite:
+            layer_ids = tuple(layer.layer_id for layer in composite)
+            cached = self._composite_cache.lookup(id(document), layer_ids)
+            transform = self._preview.artwork_transform
+            plot_settings = self._settings_service.plot_settings
+            fallback = self._settings_service.preview_fallback_work_area
+            fallback_orientation = self._settings_service.preview_fallback_work_area_orientation
+            print_margins = self._settings_service.print_margins
+            keep_inside = self._preview.clip_shape
+            clip_mode = self._preview.clip_mode
+
+            def composite_operation() -> InteractivePreview:
+                return compute_interactive_composite_preview(
+                    document,
+                    composite,
+                    cached_geometry=cached,
+                    transform=transform,
+                    plot_settings=plot_settings,
+                    fallback=fallback,
+                    fallback_orientation=fallback_orientation,
+                    print_margins=print_margins,
+                    keep_inside=keep_inside,
+                    clip_mode=clip_mode,
+                )
+
+            self._preview_compute.submit(composite_operation)
+            return
+
         row = self._layers_list.currentRow()
         if row < 0 or row >= len(self._layers):
             return
 
-        document = self._document
         layer = self._layers[row]
         transform = self._preview.artwork_transform
         plot_settings = self._settings_service.plot_settings
@@ -1280,17 +1369,34 @@ class MainWindow(QMainWindow):
             return
         if self._document is None or id(self._document) != result.document_id:
             return
-        if result.fresh_geometry is not None:
-            self._geometry_cache.prepare_count += 1
-            self._geometry_cache.store(
+        if result.composite_layer_ids:
+            current_ids = tuple(layer.layer_id for layer in self._composite_layers())
+            if current_ids != result.composite_layer_ids:
+                return
+            if result.fresh_geometry is not None:
+                self._composite_cache.prepare_count += 1
+                self._composite_cache.store(
+                    result.document_id,
+                    result.composite_layer_ids,
+                    result.fresh_geometry,
+                )
+            self._composite_cache.clip_count += 1
+            geometry = result.fresh_geometry or self._composite_cache.lookup(
                 result.document_id,
-                result.layer_id,
-                result.fresh_geometry,
+                result.composite_layer_ids,
             )
-        self._geometry_cache.clip_count += 1
-        geometry = result.fresh_geometry or self._geometry_cache.lookup(
-            result.document_id, result.layer_id
-        )
+        else:
+            if result.fresh_geometry is not None:
+                self._geometry_cache.prepare_count += 1
+                self._geometry_cache.store(
+                    result.document_id,
+                    result.layer_id,
+                    result.fresh_geometry,
+                )
+            self._geometry_cache.clip_count += 1
+            geometry = result.fresh_geometry or self._geometry_cache.lookup(
+                result.document_id, result.layer_id
+            )
         self._preview.set_context_polylines(geometry.polylines if geometry is not None else None)
         if result.page_width_mm > 0 and result.page_height_mm > 0 and result.work_area is not None:
             self._preview.set_work_area_overlay(
@@ -1311,6 +1417,21 @@ class MainWindow(QMainWindow):
             status_lines=result.status_lines,
         )
         self._refresh_artwork_transform_panel()
+
+    def _on_highlighted_geometry_finished(self, generation: int, result: object) -> None:
+        if not self._highlighted_compute.gate.accept(generation):
+            return
+        if isinstance(result, Exception) or not isinstance(result, HighlightedLayerGeometry):
+            return
+        if self._document is None or id(self._document) != result.document_id:
+            return
+        current = self._current_layer()
+        if current is None or current.layer_id != result.layer_id:
+            return
+        self._geometry_cache.prepare_count += 1
+        self._geometry_cache.store(result.document_id, result.layer_id, result.geometry)
+        if self._composite_layers():
+            self._refresh_artwork_transform_panel()
 
     def _on_plot_settings_changed(self) -> None:
         self._mark_project_dirty()
