@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from plotpilot.app.macos import configure_branding
+from plotpilot.app.macos import configure_branding, running_inside_plotpilot_app
 
 _APP_NAME = "PlotPilot"
 
@@ -29,7 +29,10 @@ def _run_qt_app() -> None:
     QGuiApplication.setApplicationDisplayName(_APP_NAME)
 
     app = QApplication(sys.argv)
-    app.setWindowIcon(application_icon())
+    # PlotPilot.app keeps the bundle icon so the Dock uses the system mask.
+    # A dev process has the Python icon until this replaces it.
+    if not running_inside_plotpilot_app():
+        app.setWindowIcon(application_icon())
     apply_theme(app)
 
     window = MainWindow()
